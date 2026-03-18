@@ -5,7 +5,6 @@ import torch.nn.functional as F
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-import yt_dlp
 import subprocess
 from scipy.io import wavfile
 
@@ -22,11 +21,9 @@ class Spectrogram(nn.Module):
         # input: (batch, time)
         stft = torch.stft(input, n_fft=self.n_fft, hop_length=self.hop_length, 
                          win_length=self.win_length, window=self.window, 
-                         center=True, pad_mode='reflect', normalized=False, onesided=True)
-        # stft: (batch, freq, time, 2)
-        real = stft[..., 0]
-        imag = stft[..., 1]
-        spectrogram = real ** 2 + imag ** 2
+                         center=True, pad_mode='reflect', normalized=False, onesided=True, return_complex=True)
+        # stft is complex: (batch, freq, time)
+        spectrogram = stft.abs() ** 2
         return spectrogram.transpose(1, 2) # (batch, time, freq)
 
 def get_mel_filterbank(sr, n_fft, n_mels, fmin, fmax):
