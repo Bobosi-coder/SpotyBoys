@@ -1,0 +1,92 @@
+\documentclass[12pt, letterpaper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{titlesec}
+\usepackage{enumitem}
+
+\title{Data Engineering Solution: Bridging User Interactions and Audio Catalogs}
+\author{Team Spotiboys}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{The Problem}
+In building a real-time, adaptive music recommendation system, we faced a critical \textbf{dataset disconnect blocker} raised during the project proposal review. To accurately train a model that is responsive to user preferences, we needed genuine user interaction data (e.g., skips, completions, session timelines). Datasets containing rich user interactions, primarily the \textbf{30Music dataset} (which contains 31 million play events across 2.7 million sessions), strictly contain textual metadata and track IDs, but \textit{no actual audio files}. Conversely, high-quality audio datasets (like MTG-Jamendo) contain rich royalty-free audio files and acoustic metadata, but \textit{zero user interaction data}. 
+
+Given that the interaction track IDs from 30Music do not map directly to the audio catalog IDs from MTG-Jamendo, a simple relational database join is impossible. Training a model on textual IDs alone prevents the recommender from understanding the actual \textit{sound} of the music, which is essential for our target cold-start and content-based adaptation features.
+
+\section{How We Solved It}
+To bridge this gap, we designed and implemented a \textbf{Content-Based Spectrum Alignment Data Pipeline}. Instead of attempting to match tracks by abstract IDs or metadata, we aligned the datasets geometrically by mapping them both into a shared mathematical space based on their raw acoustic properties. 
+
+The data engineering pipeline consists of four main steps:
+\begin{enumerate}[label=\textbf{Step \arabic*:}, leftmargin=*]
+    \item \textbf{High-Value Target Identification:} We parse the raw 30Music user interaction sessions using Apache Spark to identify the top 100,000 most frequently played tracks. This limits our scraping scope to the most statistically relevant music.
+    \item \textbf{Targeted Audio Acquisition:} We distribute these target queries to a worker fleet executing \texttt{yt-dlp}. The workers programmatically search and download the physical audio (\texttt{.mp3}/\texttt{.ogg}) for the interacted tracks directly from platforms like YouTube Music or SoundCloud.
+    \item \textbf{Universal Spectrum Extraction:} Both the newly downloaded ``interaction audio'' and the existing MTG-Jamendo ``catalog audio'' are processed through a pre-trained deep audio model (e.g., CLAP, Jukebox, or Essentia). This step converts the raw audio waveforms into dense, multi-dimensional vector embeddings (spectrums).
+    \item \textbf{Feature Joining:} Because all music is now represented by acoustic vectors of the same dimensionality, we use Spark to join the original user interaction timelines with the newly extracted audio vectors for those tracks. 
+\end{enumerate}
+The resulting dataset provides the model with user implicit feedback (clicks/skips) directly correlated with deep acoustic representations, entirely circumventing the ID mismatch problem.
+
+\section{Why This Method is Recommended}
+This feature extraction and alignment approach is highly recommended for modern MLOps audio pipelines for several reasons:
+\begin{itemize}
+    \item \textbf{Solves the Cold-Start Problem:} New tracks added to the catalog (MTG-Jamendo) immediately receive an acoustic embedding. The model can accurately recommend them to users who have historically engaged with acoustically similar vectors from Last.fm, even if the new track has zero historical plays.
+    \item \textbf{Model Generalization:} The neural ranker learns to map user preferences to actual musical qualities (tempo, timbre, mood) rather than memorizing arbitrary catalog IDs.
+    \item \textbf{Scalability:} While the initial spectrum extraction is computationally heavy (running on GPU batches), the resulting embeddings are lightweight vectors. These vectors can be efficiently indexed in a Vector Database (like Milvus or Faiss) for sub-millisecond Approximate Nearest Neighbor (ANN) retrieval during real-time serving.
+\end{itemize}
+
+\section{Local Storage Feasibility}
+A primary concern when processing millions of audio files is storage overhead. We have designed this pipeline to be fully executable on \textbf{Local Storage / On-Premise Hardware} by decoupling the transient raw audio from the permanent feature representations:
+\begin{itemize}
+    \item \textbf{Transient Audio Scraping:} Retrieving 100,000 `.mp3` files at 3 minutes each equates to approximately 500GB of raw audio. While this fits on a standard local SSD, our pipeline aggressively \textit{deletes} the raw `.mp3` file from the local disk the moment the target vector is computed in memory.
+    \item \textbf{Dense Vector Storage:} The resulting universal spectrum embedding is a lightweight float array (e.g., 512 dimensions). Storing 100,000 dense vectors requires less than \textbf{500MB} of total local storage. This allows us to comfortably host our entire Vector Database and Redis Feature Store in local RAM on a standard development machine without relying on expensive cloud blob storage (AWS S3) for the final model serving.
+\end{itemize}
+
+\section{Model Accuracy via Granular \& Contextual Session Features}
+While resolving the catalog mismatch using spectrum extraction allows us to train the model, treating user interactions simply as binary labels (\texttt{SKIP} vs \texttt{COMPLETE}) leaves significant predictive power on the table. To maximize model accuracy and responsiveness, our pipeline engineers a suite of \textbf{Granular Behavioral and Contextual Features} directly from the session timelines:
+
+\begin{itemize}
+    \item \textbf{Percent Completion:} Calculated as `Play Duration / Total Track Duration`. A track skipped after 90\% completion provides a vastly different preference signal than a track skipped after 5 seconds. Continuous completion percentages allow the model to learn nuanced satisfaction levels.
+    \item \textbf{Relative Skip Position:} We categorize skips based on when they occur relative to the track's structure (e.g., \texttt{Early\_Skip}, \texttt{Median\_Skip}, \texttt{Late\_Skip}). An early skip often indicates a strong genre or mood mismatch, whereas a late skip might simply indicate the user was ready for the next song.
+    \item \textbf{Temporal Context (Time \& Day):} User listening preferences vary drastically depending on the time of day (e.g., energetic morning commute vs. relaxing late-night focus) and the day of the week (weekdays vs. weekends). Incorporating timestamps allows the ranker to construct time-aware embeddings.
+    \item \textbf{Sequence Dynamics (Skip Streaks):} By counting the number of consecutive skips prior to the current track, the model can detect user dissatisfaction or a highly selective ``active'' browsing mood. A high skip streak signals the ranker to explore fundamentally different acoustic spaces rather than exploiting similar content.
+    \item \textbf{Session Position (Fatigue):} The index of the track in the current listening session (e.g., track 1 vs. track 50). Users experience ``listening fatigue'' later in active sessions, making them more likely to skip regardless of the track's objective quality. Conditioning on session depth corrects this bias.
+    \item \textbf{Replay Counts \& Momentum:} We aggregate the number of times a user repeats a song within a session. High replay counts exponentially increase the weight of that track's acoustic vector in the user's active session profile, driving stronger short-term recommendations for similar tracks.
+\end{itemize}
+
+By appending these continuous, categorical, temporal, and sequential features to the acoustic embeddings in our Feature Store, the Neural Ranker can optimize for a much richer objective function (e.g., maximizing expected play duration) rather than simple binary classification.
+
+\section{Resolving the Cold-Start Problem via Historical Momentum}
+A major objective for our recommender system is to provide highly accurate predictions even from a "cold start" (e.g., after only 5-10 user interactions). To achieve this without relying on long-term user profiles, we engineer a dynamic \textbf{User Context Momentum Vector}.
+
+Instead of treating the target track in isolation, the pipeline calculates a rolling, geometric average of the deep audio vectors from the last \( N \) (e.g., 5) tracks the user completed within the current session. This constructs a continuously morphing 32-to-512 dimensional array representing the user's immediate "taste state."
+
+The primary feature sent to the Ranker is the \textbf{Context Cosine Similarity}:
+\[ \text{Sim}(U, T) = 1 - \frac{U \cdot T}{\|U\| \|T\|} \]
+Where \( U \) is the User's Historical Momentum Vector and \( T \) is the Candidate Target Track Vector.
+
+\textit{Impact:} If a user completes 5 pop songs, their Context Vector becomes strongly aligned with pop acoustic signatures. If the 6th track is Heavy Metal, the Cosine Similarity instantly drops toward 0, mathematically forcing the Ranker to predict a \texttt{SKIP}. This enables the model to accurately predict behavior in real-time, solving the cold-start problem using only immediate historical momentum rather than years of aggregated data.
+
+\section{Alternatives and Potential Improvements}
+
+\subsection{Alternative Methods}
+\begin{enumerate}
+    \item \textbf{Exact Metadata Matching (String Matching/Fuzzy Logic):} Attempting to string-match `Artist/Title` pairs between Last.fm and MTG-Jamendo. 
+    \textit{Drawback:} Highly brittle. MTG-Jamendo is composed of independent and CC-licensed artists, so the overlap with mainstream Last.fm data is often near zero.
+    \item \textbf{Tag-Based Alignment:} Mapping User Interactions to Last.fm Genere/Mood tags, and joining those tags with MTG-Jamendo tags.
+    \textit{Drawback:} Tags are subjective, noisy, and sparse. A ``rock'' tag on a 1970s ballad sounds entirely different than a ``rock'' tag on a modern heavy metal track.
+\end{enumerate}
+
+\subsection{How We Can Improve the Pipeline}
+\begin{itemize}
+    \item \textbf{Streaming Feature Extraction:} Currently, the \texttt{yt-dlp} extraction and CLAP embedding generation is a heavy batch process. We could improve this by deploying a Serverless GPU function (e.g., via AWS Lambda or Ray Serve) that fetches and embeddings obscure long-tail tracks on-the-fly when encountered in the logs, rather than pre-computing everything.
+    \item \textbf{Multi-Modal Embeddings:} Beyond just the audio spectrum (CLAP), we could enhance the embedding vector by concatenating it with NLP embeddings of the track's lyrics (e.g., via BERT) or user-generated reviews, creating a richer representation of the song.
+    \item \textbf{Dimensionality Reduction:} Raw audio model embeddings can be very large (e.g., 1024 dimensions). Applying PCA or training a specialized auto-encoder to compress these vectors down to 128 dimensions would significantly reduce the memory footprint of our Redis online Feature Store and speed up real-time inference latency.
+\end{itemize}
+
+\end{document}

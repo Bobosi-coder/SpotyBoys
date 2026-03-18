@@ -1,2 +1,22 @@
 *.tar.gz
 data/
+
+# Environments
+venv/
+.env
+
+# Cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Data and Models
+data/raw/
+data/processed/
+models/
+*.mp3
+*.wav
+*.m4a
+
+# OS Files
+.DS_Store
