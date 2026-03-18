@@ -83,12 +83,15 @@ def parse_30music_tracks(filepath, nrows=5000):
 if __name__ == "__main__":
     # Example Usage for Dawei
     print("1. Parsing events (edges)...")
-    # df_events = parse_30music_events("/content/30music/relations/events.idomaar")
-    
+    df_events = parse_30music_events("/content/30music/relations/events.idomaar")
+    df_events.to_csv("events.csv", index=False)
+
+
     print("2. Parsing tracks (nodes)...")
-    # df_tracks = parse_30music_tracks("/content/30music/entities/tracks.idomaar")
+    df_tracks = parse_30music_tracks("/content/30music/entities/tracks.idomaar")
+    df_tracks.to_csv("tracks.csv", index=False)
     
-    print("3. Joining to create Tabular Format...")
+    #print("3. Joining to create Tabular Format...")
     # df = pd.merge(df_events, df_tracks, on="track_id", how="left")
     
     # print(df.head())

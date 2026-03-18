@@ -15,120 +15,71 @@ NUM_ROWS = 100
 CACHE_DIR = "./audio_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# 30Music Dataset Paths (Update these if running locally vs Colab)
-EVENTS_FILE = "./30music/relations/events.idomaar"
-TRACKS_FILE = "./30music/entities/tracks.idomaar"
+# A small pool of diverse tracks to download (so yt-dlp doesn't run 100 times)
+TRACK_POOL = [
+    {"artist": "Daft Punk", "track": "Get Lucky", "len": 240, "genre": "Electronic"},
+    {"artist": "Queen", "track": "Bohemian Rhapsody", "len": 354, "genre": "Rock"},
+    {"artist": "Miles Davis", "track": "So What", "len": 540, "genre": "Jazz"},
+    {"artist": "Hans Zimmer", "track": "Time", "len": 270, "genre": "Classical"},
+    {"artist": "Eminem", "track": "Lose Yourself", "len": 320, "genre": "HipHop"},
+    {"artist": "The Weeknd", "track": "Blinding Lights", "len": 200, "genre": "Pop"},
+    {"artist": "Nirvana", "track": "Smells Like Teen Spirit", "len": 300, "genre": "Grunge"},
+    {"artist": "Ed Sheeran", "track": "Shape of You", "len": 233, "genre": "Pop"},
+    {"artist": "Metallica", "track": "Enter Sandman", "len": 331, "genre": "Metal"},
+    {"artist": "Adele", "track": "Rolling in the Deep", "len": 228, "genre": "Pop"}
+]
+
+USERS = ["U1", "U2", "U3", "U4", "U5"]
 
 # ---------------------------------------------------------
-# Step 1: Parse 30Music Graph Data into Tabular Format
+# Step 1: Simulate 100 Rows of Granular Interaction Logs
 # ---------------------------------------------------------
-import json
-
-def parse_30music_tracks(filepath):
-    print(f"Reading Track Metadata from {filepath}...")
-    track_dict = {}
-    if not os.path.exists(filepath):
-        print(f"⚠️ Could not find {filepath}. Please update the path.")
-        return track_dict
-        
-    with open(filepath, "r", encoding="utf-8", errors="replace") as f:
-        # We parse the whole track dictionary to join later
-        for line in f:
-            parts = line.strip().split('\t')
-            if len(parts) < 3 or parts[0] != "track": continue
-            try:
-                track_id = parts[1]
-                props = json.loads(parts[2])
-                track_dict[track_id] = {
-                    "track": props.get('Title', 'Unknown'),
-                    "artist": props.get('artists', [{'name':'Unknown'}])[0].get('name', 'Unknown'),
-                    "track_len_sec": props.get('duration', 200) # Fallback to 200s if missing
-                }
-            except json.JSONDecodeError:
-                continue
-    return track_dict
-
-def generate_base_data(num_rows=NUM_ROWS) -> pd.DataFrame:
-    print(f"📥 Parsing {num_rows} User Interaction Events from 30Music...")
-    track_metadata = parse_30music_tracks(TRACKS_FILE)
-    
+def generate_base_data() -> pd.DataFrame:
     data = []
-    if not os.path.exists(EVENTS_FILE):
-        print(f"⚠️ Could not find {EVENTS_FILE}. Please ensure the 30Music dataset is downloaded.")
-        print("For Demo purposes, falling back to a dummy chunk until data is linked...")
-        # Fallback just so the script doesn't crash if the user hasn't downloaded the 5GB dataset yet
-        return __generate_dummy_fallback()
+    current_time = datetime(2026, 3, 16, 8, 0, 0)
+    
+    for _ in range(NUM_ROWS):
+        user = random.choice(USERS)
         
-    with open(EVENTS_FILE, "r", encoding="utf-8", errors="replace") as f:
-        for i, line in enumerate(f):
-            if len(data) >= num_rows:
-                break
-                
-            parts = line.strip().split('\t')
-            if len(parts) < 5 or parts[0] != "event.play": continue
+        # Decide if this is a new session (random gap) or continuing
+        is_new_session = random.random() < 0.2
+        if is_new_session:
+            current_time += timedelta(hours=random.randint(2, 24))
+            # new session id based on user and time
+            session_id = f"S_{user}_{current_time.strftime('%Y%m%d%H')}"
+        else:
+            current_time += timedelta(minutes=random.randint(1, 10))
+            # Just reuse the last session string for simplicity if it exists, else make one
+            session_id = f"S_{user}_{current_time.strftime('%Y%m%d')}_Active"
+
+        track_info = random.choice(TRACK_POOL)
+        
+        # Determine behavior
+        action = random.choice(["COMPLETE", "SKIP"])
+        if action == "COMPLETE":
+            play_time = track_info['len']
+            replay = random.choice([0, 0, 0, 1, 2]) # slight chance of repeats
+        else:
+            play_time = random.randint(5, int(track_info['len'] * 0.8)) # skip somewhere before 80%
+            replay = 0
             
-            try:
-                timestamp = int(parts[1])
-                props = json.loads(parts[2])
-                play_time_sec = props.get('playtime', 0)
-                
-                # Get User ID
-                subjects = json.loads(parts[3]).get('subjects', [])
-                user_id = next((s.get('id') for s in subjects if s.get('type') == 'user'), "U_Unknown")
-                
-                # Get Track ID
-                objects = json.loads(parts[4]).get('objects', [])
-                track_id = next((o.get('id') for o in objects if o.get('type') == 'track'), "T_Unknown")
-                
-                # Join Metadata
-                meta = track_metadata.get(str(track_id), {"track": "Unknown", "artist": "Unknown", "track_len_sec": 200})
-                
-                # Derive Action
-                action = "COMPLETE" if play_time_sec >= (meta['track_len_sec'] * 0.8) else "SKIP"
-                
-                # Synthetic session grouping for the demo (grouping by user and Day)
-                dt = datetime.fromtimestamp(timestamp)
-                session_id = f"S_{user_id}_{dt.strftime('%Y%m%d')}"
-                
-                data.append({
-                    "session_id": session_id,
-                    "user_id": user_id,
-                    "timestamp": dt,
-                    "artist": meta['artist'],
-                    "track": meta['track'],
-                    "track_len_sec": meta['track_len_sec'],
-                    "play_time_sec": play_time_sec,
-                    "replay_count": 0, # Could be calculated by grouping later
-                    "action": action
-                })
-            except Exception as e:
-                continue
-                
+        data.append({
+            "session_id": session_id,
+            "user_id": user,
+            "timestamp": current_time,
+            "artist": track_info['artist'],
+            "track": track_info['track'],
+            "track_len_sec": track_info['len'],
+            "play_time_sec": play_time,
+            "replay_count": replay,
+            "action": action
+        })
+    
     df = pd.DataFrame(data)
+    # Sort chronologically
     df.sort_values(by=['user_id', 'timestamp'], inplace=True)
     df.reset_index(drop=True, inplace=True)
     return df
-
-import random
-def __generate_dummy_fallback():
-    print("For Demo purposes, generating a synthetic chunk mimicking 30Music...")
-    TRACK_POOL = [
-        {"artist": "Daft Punk", "track": "Get Lucky", "len": 240},
-        {"artist": "Queen", "track": "Bohemian Rhapsody", "len": 354},
-        {"artist": "Miles Davis", "track": "So What", "len": 540},
-        {"artist": "Adele", "track": "Rolling in the Deep", "len": 228}
-    ]
-    current_time = datetime(2026, 3, 16, 8, 0, 0)
-    data = []
-    for _ in range(NUM_ROWS):
-        track_info = random.choice(TRACK_POOL)
-        data.append({
-            "session_id": "S_Fallback", "user_id": "U1", "timestamp": current_time,
-            "artist": track_info['artist'], "track": track_info['track'], "track_len_sec": track_info['len'],
-            "play_time_sec": track_info['len'], "replay_count": 0, "action": "COMPLETE"
-        })
-        current_time += timedelta(minutes=4)
-    return pd.DataFrame(data)
 
 # ---------------------------------------------------------
 # Step 2: Calculate Continuous & Contextual Session Features
@@ -195,8 +146,7 @@ def get_audio_embedding(artist, track):
                 ydl.download([f"ytsearch1:{key} audio"])
         success = True
     except Exception as e:
-        # YouTube often throws HTTP 400 "Precondition check failed" for scraping bots
-        print(f"⚠️ YouTube anti-bot protection/rate-limit blocked the download for '{key}'. Generating deterministic mock acoustic vector instead.")
+        print(f"⚠️ yt-dlp fetch failed for {key}. Using robust mock vector.")
     
     # Extract Vector (Mocking sophisticated 128-dim deep learning vector for POC speed,
     # because running 10x deep networks in a presentation script takes minutes).

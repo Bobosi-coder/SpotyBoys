@@ -129,9 +129,10 @@ CHECKPOINT = "./models/Cnn14.pth"
 SR = 32000
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 OUTPUT_CATALOG = "./data/processed/song_catalog_embeddings.csv"
+AUDIO_PREVIEWS_DIR = os.getenv("AUDIO_PREVIEWS_DIR", "./data/raw/audio_previews")
 
 def process_local_audio(track_id):
-    tmp_full_mp3 = f"./data/raw/audio_previews/{track_id}.mp3"
+    tmp_full_mp3 = os.path.join(AUDIO_PREVIEWS_DIR, f"{track_id}.mp3")
     tmp_trim_wav = f"/tmp/{track_id}_trim.wav"
     
     # If the file hasn't been downloaded by the previous parallel stage, skip it.

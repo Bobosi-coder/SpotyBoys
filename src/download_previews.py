@@ -7,7 +7,7 @@ import time
 
 # Configuration
 UNIVERSE_FILE = "./data/processed/universe_metadata.csv"
-OUTPUT_DIR = "./data/raw/audio_previews"
+OUTPUT_DIR = os.getenv("AUDIO_PREVIEWS_DIR", "./data/raw/audio_previews")
 MAX_WORKERS = 5 # Modest concurrency to avoid API rate limits
 
 # Create output directory
