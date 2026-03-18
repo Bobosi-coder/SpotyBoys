@@ -133,54 +133,35 @@ SR = 32000
 DEVICE = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 OUTPUT_CATALOG = "./data/processed/song_catalog_embeddings.csv"
 
-import requests
-
-def download_and_extract(artist, track, track_id):
-    query = f"{artist} {track}"
-    tmp_full_mp3 = f"/tmp/{track_id}_full.mp3"
+def process_local_audio(track_id):
+    tmp_full_mp3 = f"./data/raw/audio_previews/{track_id}.mp3"
     tmp_trim_wav = f"/tmp/{track_id}_trim.wav"
     
+    # If the file hasn't been downloaded by the previous parallel stage, skip it.
+    if not os.path.exists(tmp_full_mp3):
+        return None
+        
     try:
-        # Step 1: Search Deezer for the track
-        search_url = f"https://api.deezer.com/search?q={requests.utils.quote(query)}"
-        response = requests.get(search_url, timeout=10).json()
-        
-        if not response.get('data'):
-            print(f"⚠️ No results on Deezer for: {query}")
-            return None
-            
-        preview_url = response['data'][0]['preview']
-        if not preview_url:
-            print(f"⚠️ No preview available for: {query}")
-            return None
-            
-        # Step 2: Download the 30s preview MP3
-        r = requests.get(preview_url, stream=True)
-        with open(tmp_full_mp3, 'wb') as f:
-            for chunk in r.iter_content(chunk_size=8192):
-                f.write(chunk)
-        
-        # Step 3: Convert/Ensure 32kHz Mono WAV (Trimming not strictly needed as it's already 30s, but kept for consistency)
+        # Step 1: Convert downloaded MP3 to 32kHz Mono WAV
         subprocess.run([
             'ffmpeg', '-y', '-i', tmp_full_mp3, 
             '-ar', str(SR), '-ac', '1', 
             tmp_trim_wav
         ], capture_output=True)
         
-        # Step 4: Load
+        # Step 2: Load
         if not os.path.exists(tmp_trim_wav): return None
         sample_rate, data = wavfile.read(tmp_trim_wav)
         waveform = data.astype(np.float32) / 32768.0 if data.dtype == np.int16 else data.astype(np.float32)
             
-        # Cleanup
-        if os.path.exists(tmp_full_mp3): os.remove(tmp_full_mp3)
+        # Cleanup ONLY the temporary WAV. The MP3 is kept as requested by the architecture.
         if os.path.exists(tmp_trim_wav): os.remove(tmp_trim_wav)
         return waveform
     except Exception as e:
-        print(f"⚠️ Failed {query}: {e}")
+        print(f"⚠️ Failed to process {track_id}: {e}")
         return None
 
-def run_pipeline():
+def run_pipeline(limit=None):
     print(f"🔥 Starting Space-Optimized Stage 1 Pipeline on {DEVICE}...")
     model = Cnn14Standalone(SR, 1024, 320, 64, 50, 14000, 527)
     checkpoint = torch.load(CHECKPOINT, map_location=DEVICE)
@@ -188,13 +169,14 @@ def run_pipeline():
     model.to(DEVICE).eval()
     
     df = pd.read_csv(UNIVERSE_FILE)
-    limit = 100 # Scaling up to 100 songs
-    subset = df.head(limit)
+    if limit is not None:
+        print(f"⚠️ Limiting Stage 1 extraction to first {limit} tracks.")
+        df = df.head(limit)
     
     results = []
-    for _, row in tqdm(subset.iterrows(), total=len(subset)):
-        artist, title, tid = row['artist_hint'], row['title'], row['track_id']
-        waveform = download_and_extract(artist, title, tid)
+    for _, row in tqdm(df.iterrows(), total=len(df), desc="Extracting PANN Features"):
+        tid = row['track_id']
+        waveform = process_local_audio(tid)
         
         if waveform is not None:
             with torch.no_grad():
@@ -207,4 +189,8 @@ def run_pipeline():
     print(f"🎉 Pipeline Test Success! Catalog saved to {OUTPUT_CATALOG}")
 
 if __name__ == "__main__":
-    run_pipeline()
+    import sys
+    limit = None
+    if len(sys.argv) > 1:
+        limit = int(sys.argv[1])
+    run_pipeline(limit=limit)

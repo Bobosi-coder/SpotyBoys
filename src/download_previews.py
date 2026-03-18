@@ -88,7 +88,9 @@ def run_download(limit=None):
             print(f"📊 Estimated time for the full 50,000 track universe: ~{est_total_hours:.1f} hours.")
 
 if __name__ == "__main__":
+    import sys
+    limit = None
+    if len(sys.argv) > 1:
+        limit = int(sys.argv[1])
     # You can change the limit here to run a smaller test first to estimate total time
-    # e.g., run_download(limit=100) tests the first 100 tracks.
-    # Set limit=None to download all tracks.
-    run_download(limit=100)
+    run_download(limit=limit)
