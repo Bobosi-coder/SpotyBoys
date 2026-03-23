@@ -54,23 +54,23 @@ def define_universe():
     universe_metadata.to_csv(os.path.join(OUTPUT_DIR, "universe_metadata.csv"), index=False)
     
     # Step 4: Filter Sessions
-    print("🧹 Phase 3: Filtering session logs to the Universal set...")
-    session_reader = pd.read_csv(SESSIONS_FILE, chunksize=chunk_size)
+    # print("🧹 Phase 3: Filtering session logs to the Universal set...")
+    # session_reader = pd.read_csv(SESSIONS_FILE, chunksize=chunk_size)
     
-    # Create the output file and write header (Overwrite existing)
-    out_session_file = os.path.join(OUTPUT_DIR, "filtered_sessions.csv")
-    if os.path.exists(out_session_file): os.remove(out_session_file)
+    # # Create the output file and write header (Overwrite existing)
+    # out_session_file = os.path.join(OUTPUT_DIR, "filtered_sessions.csv")
+    # if os.path.exists(out_session_file): os.remove(out_session_file)
     
-    first_chunk = True
-    for chunk in tqdm(session_reader, desc="Filtering sessions"):
-        filtered_chunk = chunk[chunk['track_id'].isin(top_tracks_set)]
-        if not filtered_chunk.empty:
-            filtered_chunk.to_csv(out_session_file, mode='a', index=False, header=first_chunk)
-            first_chunk = False
+    # first_chunk = True
+    # for chunk in tqdm(session_reader, desc="Filtering sessions"):
+    #     filtered_chunk = chunk[chunk['track_id'].isin(top_tracks_set)]
+    #     if not filtered_chunk.empty:
+    #         filtered_chunk.to_csv(out_session_file, mode='a', index=False, header=first_chunk)
+    #         first_chunk = False
             
-    print("🎉 Universe Synchronization Complete!")
-    print(f"- Universe Size: {len(universe_metadata)} unique tracks")
-    print(f"- Processed Data stored in: {OUTPUT_DIR}")
+    # print("🎉 Universe Synchronization Complete!")
+    # print(f"- Universe Size: {len(universe_metadata)} unique tracks")
+    # print(f"- Processed Data stored in: {OUTPUT_DIR}")
 
 if __name__ == "__main__":
     define_universe()
