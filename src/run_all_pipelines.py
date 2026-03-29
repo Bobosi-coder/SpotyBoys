@@ -18,8 +18,12 @@ def run_all_stages(limit=None):
     subprocess.run([sys.executable, "src/pipeline_stage1_catalog.py"] + limit_args, check=True)
     
     # 3. Session Feature Engineering
-    print("\n[3/3] Engineering Session Contexts (Stage 2)...")
+    print("\n[3/4] Engineering Session Contexts (Stage 2)...")
     subprocess.run([sys.executable, "src/pipeline_stage2_training.py"], check=True)
+    
+    # 4. Vector Database
+    print("\n[4/4] Building FAISS Vector Database...")
+    subprocess.run([sys.executable, "src/build_vector_db.py"], check=True)
     
     print("\n" + "="*60)
     print("🎉 FULL PIPELINE COMPLETED SUCCESSFULLY!")
