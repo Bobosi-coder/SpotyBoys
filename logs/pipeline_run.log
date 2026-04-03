@@ -1,0 +1,54 @@
+2026-04-03 10:51:59 | INFO     | ============================================================
+2026-04-03 10:51:59 | INFO     | SpotyBoys 数据预处理流水线启动  stages=['1', '2', '3']
+2026-04-03 10:51:59 | INFO     | ============================================================
+2026-04-03 10:51:59 | INFO     | ▶ 第一阶段：构建去重曲目目录
+2026-04-03 10:52:05 | INFO     | ✓ 第一阶段完成
+2026-04-03 10:52:05 | INFO     | ▶ 第二阶段：从事件日志计算播放次数
+2026-04-03 10:52:54 | INFO     | ✓ 第二阶段完成
+2026-04-03 10:52:54 | INFO     | ▶ 第三阶段：合并目录与播放计数
+2026-04-03 10:53:02 | INFO     | ✓ 第三阶段完成
+2026-04-03 10:53:02 | INFO     | ============================================================
+2026-04-03 10:53:02 | INFO     | 流水线完成  总耗时：1m 03s
+2026-04-03 10:53:02 | INFO     | ============================================================
+2026-04-03 10:53:10 | INFO     | ============================================================
+2026-04-03 10:53:10 | INFO     | SpotyBoys 数据预处理流水线启动  stages=['4']
+2026-04-03 10:53:10 | INFO     | ============================================================
+2026-04-03 10:53:10 | INFO     | ▶ 第四阶段：下载-嵌入流水线  batch_size=10  workers=5  limit=10
+2026-04-03 10:53:17 | ERROR    | 流水线异常终止：[Errno 2] No such file or directory: '/Users/breeze./panns_data/class_labels_indices.csv'
+Traceback (most recent call last):
+  File "/Users/breeze./Desktop/Project/MLOps/pipeline.py", line 86, in main
+    run_pipeline(
+    ~~~~~~~~~~~~^
+        batch_size      = args.batch_size,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+        checkpoint_path = args.checkpoint,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/breeze./Desktop/Project/MLOps/src/stage4_embed.py", line 218, in run_pipeline
+    from panns_inference import AudioTagging
+  File "/Users/breeze./Desktop/Project/MLOps/.venv/lib/python3.13/site-packages/panns_inference/__init__.py", line 1, in <module>
+    from .inference import AudioTagging, SoundEventDetection
+  File "/Users/breeze./Desktop/Project/MLOps/.venv/lib/python3.13/site-packages/panns_inference/inference.py", line 11, in <module>
+    from .config import labels, classes_num
+  File "/Users/breeze./Desktop/Project/MLOps/.venv/lib/python3.13/site-packages/panns_inference/config.py", line 16, in <module>
+    with open(labels_csv_path, 'r') as f:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/Users/breeze./panns_data/class_labels_indices.csv'
+2026-04-03 10:58:52 | INFO     | ============================================================
+2026-04-03 10:58:52 | INFO     | SpotyBoys 数据预处理流水线启动  stages=['4']
+2026-04-03 10:58:52 | INFO     | ============================================================
+2026-04-03 10:58:52 | INFO     | ▶ 第四阶段：下载-嵌入流水线  batch_size=10  workers=5  limit=10
+2026-04-03 10:59:35 | INFO     | ✓ 第四阶段完成
+2026-04-03 10:59:35 | INFO     | ============================================================
+2026-04-03 10:59:35 | INFO     | 流水线完成  总耗时：0m 42s
+2026-04-03 10:59:35 | INFO     | ============================================================
+2026-04-03 13:38:19 | INFO     | ============================================================
+2026-04-03 13:38:19 | INFO     | SpotyBoys 数据预处理流水线启动  stages=['4']
+2026-04-03 13:38:19 | INFO     | ============================================================
+2026-04-03 13:38:19 | INFO     | ▶ 第四阶段：下载-嵌入流水线  batch_size=500  workers=5  limit=None
+2026-04-03 14:02:58 | INFO     | ============================================================
+2026-04-03 14:02:58 | INFO     | SpotyBoys 数据预处理流水线启动  stages=['4']
+2026-04-03 14:02:58 | INFO     | ============================================================
+2026-04-03 14:02:59 | INFO     | ▶ 第四阶段：下载-嵌入流水线  batch_size=50000  workers=5  limit=None

@@ -1,0 +1,5 @@
+2026-04-03 10:52:05 | INFO     | 加载 data/raw/content/30music_parsed/events.csv
+2026-04-03 10:52:51 | INFO     | 加载 events.csv：31,351,945 行
+2026-04-03 10:52:51 | INFO     | 去重（event_id）：31,351,945 → 31,351,945 行，丢弃 0 行
+2026-04-03 10:52:53 | INFO     | 统计完成：覆盖 4,519,104 个唯一 track_id
+2026-04-03 10:52:54 | INFO     | 输出 event_playcount.csv，耗时 49s
