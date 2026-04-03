@@ -18,5 +18,8 @@ models/
 *.wav
 *.m4a
 
+# Analysis Docs
+docs/
+
 # OS Files
 .DS_Store

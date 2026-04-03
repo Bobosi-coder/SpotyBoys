@@ -79,7 +79,7 @@ def main():
     pt_df = pd.read_csv(PLAYLIST_TRACKS_FILE)
     initial_pt = len(pt_df)
     pt_df = pt_df[pt_df['track_id'].isin(valid_track_ids)]
-    #pt_df.to_csv(OUT_PLAYLIST_TRACKS, index=False)
+    pt_df.to_csv(OUT_PLAYLIST_TRACKS, index=False)
     
     valid_playlist_ids = set(pt_df['playlist_id'].unique())
     print(f"   Playlist Tracks Keep/Original: {len(pt_df)} / {initial_pt}")
