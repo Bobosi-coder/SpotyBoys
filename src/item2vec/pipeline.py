@@ -66,14 +66,14 @@ def main():
 
     try:
         if "a" in stages:
-            from item2vec.stage_a_corpus import run as run_a
+            from .stage_a_corpus import run as run_a
             log.info("▶ Stage A — Build training corpus")
             stats_a = run_a()
             log.info(f"✓ Stage A done: {stats_a['n_sessions']:,} sessions, "
                      f"{stats_a['n_tokens']:,} tokens")
 
         if "b" in stages:
-            from item2vec.stage_b_train import run as run_b
+            from .stage_b_train import run as run_b
             log.info("▶ Stage B — Train Item2Vec")
             stats_b = run_b(
                 vector_size        = args.vector_size,
@@ -91,7 +91,7 @@ def main():
                      f"run_id={run_id}")
 
         if "c" in stages:
-            from item2vec.stage_c_validate import run as run_c
+            from .stage_c_validate import run as run_c
             log.info("▶ Stage C — Validate embeddings")
             stats_c = run_c(
                 run_id             = run_id,
@@ -102,7 +102,7 @@ def main():
                      f"random_cosine={stats_c['mean_rand_cosine']:.4f}")
 
         if "d" in stages:
-            from item2vec.stage_d_filter import run as run_d
+            from .stage_d_filter import run as run_d
             log.info("▶ Stage D — Filter interaction tables")
             stats_d = run_d(
                 run_id             = run_id,

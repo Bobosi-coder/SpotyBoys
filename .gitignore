@@ -25,3 +25,7 @@ docs/
 
 # OS Files
 .DS_Store
+
+
+mlruns/
+mlflow.db
