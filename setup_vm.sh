@@ -2,7 +2,12 @@
 # =============================================================================
 # setup_vm.sh — Spoty Boys VM Initialization Script
 #
-# Downloads the project's data/ and panns/ directories from Chameleon S3.
+# Steps:
+#   1. Install uv (Python package manager) if not already present
+#   2. Run `uv sync` to install all project dependencies
+#   3. Install awscli if not already present
+#   4. Download data/ and panns/ from Chameleon S3
+#
 # No manual configuration required — just run this script from the project root.
 #
 # Usage:
@@ -10,21 +15,6 @@
 # =============================================================================
 
 set -euo pipefail
-
-# --------------------------------------------------------------------------- #
-# S3 Configuration
-# --------------------------------------------------------------------------- #
-export AWS_ACCESS_KEY_ID="11580ec852704238a35acfbd65c7146a"
-export AWS_SECRET_ACCESS_KEY="2759a133cae84a8e9a48c609c4dbc1b1"
-
-S3_ENDPOINT="https://chi.tacc.chameleoncloud.org:7480"
-BUCKET="proj23-mlflow-artifacts"
-
-# Mapping of S3 prefixes to local destination paths (relative to project root)
-declare -A SYNC_TARGETS=(
-    ["data/"]="./data/"
-    ["panns/"]="./panns/"
-)
 
 # --------------------------------------------------------------------------- #
 # Utility functions
@@ -40,28 +30,80 @@ cd "${SCRIPT_DIR}"
 log "Working directory: ${SCRIPT_DIR}"
 
 # --------------------------------------------------------------------------- #
-# Install awscli if not already available
+# Step 1: Install uv if not already available
 # --------------------------------------------------------------------------- #
-if ! command -v aws &>/dev/null; then
-    log "aws CLI not found. Installing via pip..."
-    pip install --quiet awscli
-    log "awscli installed successfully."
+log "========================================================"
+log "Step 1: Setting up uv"
+log "========================================================"
+
+if ! command -v uv &>/dev/null; then
+    log "uv not found. Installing via official installer..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+
+    # Make uv available in the current shell session
+    export PATH="${HOME}/.local/bin:${PATH}"
+    log "uv installed: $(uv --version)"
 else
-    log "aws CLI is ready: $(aws --version 2>&1)"
+    log "uv is already installed: $(uv --version)"
 fi
 
-# --------------------------------------------------------------------------- #
-# Suppress InsecureRequestWarning produced by --no-verify-ssl
-# (Chameleon's Swift S3 gateway uses a self-signed certificate; this is expected)
-# --------------------------------------------------------------------------- #
-export PYTHONWARNINGS="ignore:Unverified HTTPS request"
+echo ""
 
 # --------------------------------------------------------------------------- #
-# Sync each target directory from S3
+# Step 2: Sync project dependencies via uv
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "Downloading assets from s3://${BUCKET}"
+log "Step 2: Installing project dependencies (uv sync)"
 log "========================================================"
+
+if [[ ! -f "pyproject.toml" ]]; then
+    die "pyproject.toml not found. Make sure you are running this script from the project root."
+fi
+
+uv sync
+log "Dependencies installed successfully."
+echo ""
+
+# --------------------------------------------------------------------------- #
+# Step 3: Install awscli if not already available
+# --------------------------------------------------------------------------- #
+log "========================================================"
+log "Step 3: Setting up aws CLI"
+log "========================================================"
+
+if ! command -v aws &>/dev/null; then
+    log "aws CLI not found. Installing via uv..."
+    uv pip install awscli
+    log "awscli installed successfully."
+else
+    log "aws CLI is already installed: $(aws --version 2>&1)"
+fi
+
+echo ""
+
+# --------------------------------------------------------------------------- #
+# Step 4: Download data/ and panns/ from Chameleon S3
+# --------------------------------------------------------------------------- #
+log "========================================================"
+log "Step 4: Downloading assets from S3"
+log "========================================================"
+
+# S3 credentials and endpoint
+export AWS_ACCESS_KEY_ID="11580ec852704238a35acfbd65c7146a"
+export AWS_SECRET_ACCESS_KEY="2759a133cae84a8e9a48c609c4dbc1b1"
+
+S3_ENDPOINT="https://chi.tacc.chameleoncloud.org:7480"
+BUCKET="proj23-mlflow-artifacts"
+
+# Mapping of S3 prefixes to local destination paths (relative to project root)
+declare -A SYNC_TARGETS=(
+    ["data/"]="./data/"
+    ["panns/"]="./panns/"
+)
+
+# Suppress InsecureRequestWarning produced by --no-verify-ssl
+# (Chameleon's Swift S3 gateway uses a self-signed certificate; this is expected)
+export PYTHONWARNINGS="ignore:Unverified HTTPS request"
 
 TOTAL=${#SYNC_TARGETS[@]}
 COUNT=0
@@ -88,8 +130,8 @@ for S3_PREFIX in "${!SYNC_TARGETS[@]}"; do
 done
 
 # --------------------------------------------------------------------------- #
-# Done
+# All done
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "All assets downloaded. Environment is ready."
+log "VM setup complete. Environment is ready."
 log "========================================================"
