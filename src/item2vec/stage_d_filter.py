@@ -4,6 +4,11 @@ Stage D — Filter Interaction Tables to Item2Vec Vocabulary
 Reads directly from data/raw/content/30music_parsed/.
 Uses item2vec_catalog.csv (vocab track_ids) as the filter set.
 
+Memory strategy for session_tracks (31M rows):
+  Read in 500K-row chunks, apply all row-level filters per chunk,
+  concat only the passing rows (~22M → fits in ~800 MB vs 2.5 GB full load).
+  Session-level min-length filter runs on the already-small result.
+
 Outputs (data/processed/):
   session_tracks_i2v.parquet
   session_meta_i2v.parquet
@@ -21,6 +26,7 @@ import pandas as pd
 
 RAW_DIR       = "data/raw/content/30music_parsed"
 OUT_DIR       = "data/processed"
+CHUNK_SIZE    = 500_000
 PLAYRATIO_CAP = 5.0
 MIN_SEQ       = 2
 
@@ -40,58 +46,78 @@ def run(
     )
     log.info(f"Stage D — vocab size: {len(vocab_ids):,} track_ids")
     stage_start = time.time()
-    metrics = {}
+    metrics     = {}
 
     # ── D1  session_tracks ────────────────────────────────────────────────────
+    # Memory fix: chunked read + row-level filters per chunk.
+    # Only concat the already-filtered rows (~22M) instead of loading all 31M.
     t0 = time.time()
     log.info("── D1 session_tracks ──")
+
     keep = ["session_id", "user_id", "position", "track_id", "playratio", "label"]
-    st   = pd.read_csv(os.path.join(RAW_DIR, "session_tracks.csv"), usecols=keep, low_memory=False)
-    n0   = len(st)
+    kept_chunks = []
+    n0 = n_clipped = 0
 
-    st = st.drop_duplicates(subset=["session_id", "position"], keep="first")
+    for chunk in pd.read_csv(
+        os.path.join(RAW_DIR, "session_tracks.csv"),
+        usecols=keep,
+        chunksize=CHUNK_SIZE,
+        low_memory=False,
+    ):
+        n0 += len(chunk)
+
+        # row-level filters — applied before accumulation
+        chunk["track_id"] = pd.to_numeric(chunk["track_id"], errors="coerce")
+        chunk = chunk[chunk["track_id"].isin(vocab_ids)]
+        chunk = chunk[chunk["label"] != "unknown"]
+        chunk["playratio"] = pd.to_numeric(chunk["playratio"], errors="coerce")
+        n_clipped += int((chunk["playratio"] > PLAYRATIO_CAP).sum())
+        chunk["playratio"] = chunk["playratio"].clip(upper=PLAYRATIO_CAP)
+
+        kept_chunks.append(chunk)
+
+    log.info(f"  raw rows: {n0:,}")
+
+    st = pd.concat(kept_chunks, ignore_index=True)
+    del kept_chunks   # free immediately
+
+    # dedup on the small result (data inspection showed 0 cross-chunk dupes,
+    # but kept for correctness)
     n1 = len(st)
-    log.info(f"  dedup (session_id, position): {n0:,} → {n1:,}")
-
-    st["track_id"] = pd.to_numeric(st["track_id"], errors="coerce")
-    st = st[st["track_id"].isin(vocab_ids)]
+    st = st.drop_duplicates(subset=["session_id", "position"], keep="first")
     n2 = len(st)
-    log.info(f"  filter track_id ∈ vocab: → {n2:,}")
+    log.info(f"  after vocab+label filter: {n1:,} | after dedup: {n2:,} | "
+             f"playratio clipped: {n_clipped:,}")
 
-    st = st[st["label"] != "unknown"]
-    n3 = len(st)
-    log.info(f"  remove label=unknown: → {n3:,}")
-
-    st["playratio"] = pd.to_numeric(st["playratio"], errors="coerce")
-    n_clipped = int((st["playratio"] > PLAYRATIO_CAP).sum())
-    st["playratio"] = st["playratio"].clip(upper=PLAYRATIO_CAP)
-    log.info(f"  clip playratio@{PLAYRATIO_CAP}: {n_clipped:,} rows clipped")
-
+    # session-level min-length filter
     valid_sessions = st.groupby("session_id").size()
     valid_sessions = valid_sessions[valid_sessions >= MIN_SEQ].index
     st = st[st["session_id"].isin(valid_sessions)]
-    n4 = len(st)
-    log.info(f"  drop sessions len<{MIN_SEQ}: → {n4:,}")
+    n3 = len(st)
+    log.info(f"  after drop sessions len<{MIN_SEQ}: {n3:,}")
 
     st = st.sort_values(["session_id", "position"]).reset_index(drop=True)
     st.to_parquet(os.path.join(OUT_DIR, "session_tracks_i2v.parquet"), index=False)
-    log.info(f"  wrote session_tracks_i2v.parquet  {n4:,} rows  {time.time()-t0:.0f}s")
-    metrics.update({"st_raw": n0, "st_after_dedup": n1, "st_after_vocab": n2,
-                    "st_after_label": n3, "st_final": n4})
+    log.info(f"  wrote session_tracks_i2v.parquet  {n3:,} rows  {time.time()-t0:.0f}s")
+    metrics.update({"st_raw": n0, "st_after_filter": n2, "st_final": n3})
 
     # ── D2  session_meta ──────────────────────────────────────────────────────
     t0 = time.time()
     log.info("── D2 session_meta ──")
+    surviving_sessions = set(st["session_id"].unique())
+    del st   # no longer needed
+
     sm = pd.read_csv(os.path.join(RAW_DIR, "session_meta.csv"),
                      usecols=["session_id", "user_id"], low_memory=False)
     sm = sm.drop_duplicates(subset="session_id", keep="first")
-    surviving = set(st["session_id"].unique())
-    sm = sm[sm["session_id"].isin(surviving)]
+    sm = sm[sm["session_id"].isin(surviving_sessions)]
     sm.to_parquet(os.path.join(OUT_DIR, "session_meta_i2v.parquet"), index=False)
     log.info(f"  wrote session_meta_i2v.parquet  {len(sm):,} rows  {time.time()-t0:.0f}s")
     metrics["sm_final"] = len(sm)
+    del sm
 
     # ── D3  playlist_tracks ───────────────────────────────────────────────────
+    # playlist_tracks.csv is only 1.6M rows — safe to load in full
     t0 = time.time()
     log.info("── D3 playlist_tracks ──")
     pt = pd.read_csv(os.path.join(RAW_DIR, "playlist_tracks.csv"),
@@ -107,20 +133,23 @@ def run(
     pt = pt[pt["playlist_id"].isin(valid_pl)]
     pt_n2 = len(pt)
     pt.to_parquet(os.path.join(OUT_DIR, "playlist_tracks_i2v.parquet"), index=False)
-    log.info(f"  {pt_n0:,} → {pt_n1:,} (vocab filter) → {pt_n2:,} (min-len)  {time.time()-t0:.0f}s")
+    log.info(f"  {pt_n0:,} → {pt_n1:,} (vocab) → {pt_n2:,} (min-len)  {time.time()-t0:.0f}s")
     metrics.update({"pt_raw": pt_n0, "pt_after_vocab": pt_n1, "pt_final": pt_n2})
 
     # ── D4  playlist_meta ─────────────────────────────────────────────────────
     t0 = time.time()
     log.info("── D4 playlist_meta ──")
+    surviving_pl = set(pt["playlist_id"].unique())
+    del pt
+
     pm = pd.read_csv(os.path.join(RAW_DIR, "playlist_meta.csv"),
                      usecols=["playlist_id", "user_id"], low_memory=False)
     pm = pm.drop_duplicates(subset="playlist_id", keep="first")
-    surviving_pl = set(pt["playlist_id"].unique())
     pm = pm[pm["playlist_id"].isin(surviving_pl)]
     pm.to_parquet(os.path.join(OUT_DIR, "playlist_meta_i2v.parquet"), index=False)
     log.info(f"  wrote playlist_meta_i2v.parquet  {len(pm):,} rows  {time.time()-t0:.0f}s")
     metrics["pm_final"] = len(pm)
+    del pm
 
     # ── D5  love ──────────────────────────────────────────────────────────────
     t0 = time.time()
@@ -133,6 +162,7 @@ def run(
     lv.to_parquet(os.path.join(OUT_DIR, "love_filtered_i2v.parquet"), index=False)
     log.info(f"  wrote love_filtered_i2v.parquet  {len(lv):,} rows  {time.time()-t0:.0f}s")
     metrics["lv_final"] = len(lv)
+    del lv
 
     # ── D6  users ─────────────────────────────────────────────────────────────
     t0 = time.time()
@@ -143,18 +173,14 @@ def run(
     us.to_parquet(os.path.join(OUT_DIR, "users_filtered_i2v.parquet"), index=False)
     log.info(f"  wrote users_filtered_i2v.parquet  {len(us):,} rows  {time.time()-t0:.0f}s")
     metrics["us_final"] = len(us)
+    del us
 
     # ── Summary ───────────────────────────────────────────────────────────────
     elapsed = time.time() - stage_start
     log.info(f"Stage D complete  {elapsed:.0f}s")
-    log.info(f"  session_tracks_i2v : {metrics['st_final']:>10,}")
-    log.info(f"  session_meta_i2v   : {metrics['sm_final']:>10,}")
-    log.info(f"  playlist_tracks_i2v: {metrics['pt_final']:>10,}")
-    log.info(f"  playlist_meta_i2v  : {metrics['pm_final']:>10,}")
-    log.info(f"  love_filtered_i2v  : {metrics['lv_final']:>10,}")
-    log.info(f"  users_filtered_i2v : {metrics['us_final']:>10,}")
+    for k, v in metrics.items():
+        log.info(f"  {k}: {v:,}")
 
-    # MLflow
     mlflow.set_experiment(mlflow_experiment)
     with mlflow.start_run(run_id=run_id):
         mlflow.log_metrics({f"filter_{k}": v for k, v in metrics.items()})

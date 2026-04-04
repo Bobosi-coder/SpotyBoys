@@ -142,6 +142,7 @@ def run(
         # Coverage vs total unique tracks in tracks.csv
         total_tracks     = len(tracks_df["track_id"].unique())
         coverage_pct     = 100.0 * len(vocab_int) / total_tracks
+        del tracks_df, vocab_df, catalog, matrix, vocab_keys, track_to_row
 
         mlflow.log_metrics({
             "vocab_size":          len(model.wv),
