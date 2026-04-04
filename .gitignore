@@ -17,6 +17,9 @@ panns/
 *.wav
 *.m4a
 
+# Logs
+logs/
+
 # Analysis Docs
 docs/
 

@@ -1,6 +1,0 @@
-2026-04-03 10:52:56 | INFO     | 加载 tracks_unique.csv：4,519,105 行
-2026-04-03 10:52:56 | INFO     | 加载 event_playcount.csv：4,519,104 行
-2026-04-03 10:52:56 | INFO     | 左连接完成：4,519,105 行
-2026-04-03 10:52:56 | INFO     | final_playcount=0 的曲目：1 条（0.0%）
-2026-04-03 10:52:56 | INFO     | final_playcount 统计：min=0, max=12,065, mean=6.9
-2026-04-03 10:53:02 | INFO     | 输出 catalog.csv：4,519,105 行，耗时 9s
