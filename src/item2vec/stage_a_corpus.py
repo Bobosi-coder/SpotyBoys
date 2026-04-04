@@ -136,12 +136,12 @@ def run(corpus_path: str = None) -> dict:
 
     del sids, tids, boundaries
 
-    # vocab count from the written file (no extra in-memory set)
-    n_vocab = int(pq.read_table(corpus_path, columns=["track_ids"])
-                  .column("track_ids")
-                  .flatten()
-                  .unique()
-                  .to_pylist().__len__())
+    # vocab count from the written file using pyarrow.compute
+    import pyarrow.compute as pc
+    _tbl    = pq.read_table(corpus_path, columns=["track_ids"])
+    _flat   = pc.list_flatten(_tbl.column("track_ids"))
+    n_vocab = len(pc.unique(_flat))
+    del _tbl, _flat
 
     log.info(f"Sessions dropped (length < {MIN_SEQ}): {n_dropped_short:,}")
     log.info(f"Final sessions: {n_sessions:,} | Total tokens: {n_tokens:,} | "
