@@ -9,7 +9,7 @@ Memory strategy for session_tracks (31M rows):
   concat only the passing rows (~22M → fits in ~800 MB vs 2.5 GB full load).
   Session-level min-length filter runs on the already-small result.
 
-Outputs (data/processed/):
+Outputs (artifacts/item2vec/):
   session_tracks_i2v.parquet
   session_meta_i2v.parquet
   playlist_tracks_i2v.parquet
@@ -25,7 +25,7 @@ import mlflow
 import pandas as pd
 
 RAW_DIR       = "data/raw/content/30music_parsed"
-OUT_DIR       = "data/processed"
+OUT_DIR       = "artifacts/item2vec"
 CHUNK_SIZE    = 500_000
 PLAYRATIO_CAP = 5.0
 MIN_SEQ       = 2

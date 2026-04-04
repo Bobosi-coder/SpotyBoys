@@ -2,7 +2,7 @@
 Stage A — Build Item2Vec Training Corpus
 
 Input:  data/raw/content/30music_parsed/session_tracks.csv  (~31M rows)
-Output: data/processed/item2vec_corpus.parquet
+Output: artifacts/item2vec/item2vec_corpus.parquet
         schema: session_id (int64), track_ids (list<int32>), length (int16)
 
 Label filter: keep positive + neutral; drop skip + unknown.
@@ -25,7 +25,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 RAW_DIR     = "data/raw/content/30music_parsed"
-OUT_DIR     = "data/processed"
+OUT_DIR     = "artifacts/item2vec"
 CHUNK_SIZE  = 500_000
 MIN_SEQ     = 2
 WRITE_BATCH = 50_000

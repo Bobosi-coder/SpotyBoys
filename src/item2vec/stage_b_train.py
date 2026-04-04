@@ -1,12 +1,12 @@
 """
 Stage B — Train Item2Vec (Word2Vec Skip-gram on session sequences)
 
-Input:  data/processed/item2vec_corpus.parquet
+Input:  artifacts/item2vec/item2vec_corpus.parquet
 Output:
-  models/item2vec_model.bin          gensim KeyedVectors
-  data/processed/item2vec_128d.npy   float32 (vocab_size, vector_size)
-  data/processed/item2vec_track_to_row.json
-  data/processed/item2vec_catalog.csv  (track_id, artist_hint, title)
+  artifacts/item2vec/item2vec_model.bin          gensim KeyedVectors
+  artifacts/item2vec/item2vec_128d.npy           float32 (vocab_size, vector_size)
+  artifacts/item2vec/item2vec_track_to_row.json
+  artifacts/item2vec/item2vec_catalog.csv        (track_id, artist_hint, title)
 
 MLflow experiment: item2vec-training
 """
@@ -22,8 +22,8 @@ import pyarrow.parquet as pq
 from gensim.models import Word2Vec
 
 RAW_DIR = "data/raw/content/30music_parsed"
-OUT_DIR = "data/processed"
-MDL_DIR = "models"
+OUT_DIR = "artifacts/item2vec"
+MDL_DIR = "artifacts/item2vec"
 
 log = logging.getLogger("item2vec.stage_b")
 

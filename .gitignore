@@ -12,6 +12,7 @@ __pycache__/
 
 # Data and Models
 models/
+artifacts/
 panns/
 *.mp3
 *.wav
@@ -21,7 +22,7 @@ panns/
 logs/
 
 # Analysis Docs
-docs/
+doc/
 
 # OS Files
 .DS_Store

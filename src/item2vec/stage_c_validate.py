@@ -19,8 +19,8 @@ import pandas as pd
 from gensim.models import KeyedVectors
 
 RAW_DIR = "data/raw/content/30music_parsed"
-OUT_DIR = "data/processed"
-MDL_DIR = "models"
+OUT_DIR = "artifacts/item2vec"
+MDL_DIR = "artifacts/item2vec"
 LOG_DIR = "logs"
 
 log = logging.getLogger("item2vec.stage_c")
