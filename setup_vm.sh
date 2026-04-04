@@ -5,7 +5,7 @@
 # Steps:
 #   1. Install uv (Python package manager) if not already present
 #   2. Run `uv sync` to install all project dependencies
-#   3. Install awscli if not already present
+#   3. Install awscli into the project virtualenv if not already present
 #   4. Download data/ and panns/ from Chameleon S3
 #
 # No manual configuration required — just run this script from the project root.
@@ -40,7 +40,7 @@ if ! command -v uv &>/dev/null; then
     log "uv not found. Installing via official installer..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
 
-    # Make uv available in the current shell session
+    # Make uv available in the current shell session immediately after install
     export PATH="${HOME}/.local/bin:${PATH}"
     log "uv installed: $(uv --version)"
 else
@@ -65,18 +65,22 @@ log "Dependencies installed successfully."
 echo ""
 
 # --------------------------------------------------------------------------- #
-# Step 3: Install awscli if not already available
+# Step 3: Install awscli into the project virtualenv
 # --------------------------------------------------------------------------- #
 log "========================================================"
 log "Step 3: Setting up aws CLI"
 log "========================================================"
 
-if ! command -v aws &>/dev/null; then
-    log "aws CLI not found. Installing via uv..."
+# uv creates the virtualenv at .venv/ — use the binary directly from there
+# so we never rely on the venv being activated in the current shell session
+AWS_BIN="${SCRIPT_DIR}/.venv/bin/aws"
+
+if [[ ! -f "${AWS_BIN}" ]]; then
+    log "aws CLI not found in .venv. Installing via uv pip..."
     uv pip install awscli
     log "awscli installed successfully."
 else
-    log "aws CLI is already installed: $(aws --version 2>&1)"
+    log "aws CLI is already installed: $("${AWS_BIN}" --version 2>&1)"
 fi
 
 echo ""
@@ -116,8 +120,8 @@ for S3_PREFIX in "${!SYNC_TARGETS[@]}"; do
     # Create the local directory if it does not exist
     mkdir -p "${LOCAL_PATH}"
 
-    # Sync from S3; only downloads new or changed files (safe to re-run)
-    aws s3 sync \
+    # Use the full path to aws binary inside .venv to avoid PATH issues
+    "${AWS_BIN}" s3 sync \
         "s3://${BUCKET}/${S3_PREFIX}" \
         "${LOCAL_PATH}" \
         --endpoint-url "${S3_ENDPOINT}" \
