@@ -51,7 +51,7 @@ class SessionEncoder(nn.Module):
             hidden_size=d_emb,
             num_layers=n_layers,
             batch_first=True,
-            dropout=dropout if n_layers > 1 else 0.0,
+            dropout=0.0,   # disabled: gfx908 MIOpen dropout JIT fails on ROCm
         )
 
     def forward(
