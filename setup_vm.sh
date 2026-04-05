@@ -82,7 +82,8 @@ log "Step 2b/5: 检测 GPU 平台，安装正确的 PyTorch"
 log "========================================================"
 VENV_PIP="${SCRIPT_DIR}/.venv/bin/pip"
 
-if lsmod | grep -q amdgpu; then
+_amdgpu=$(lsmod | grep amdgpu || true)
+if [[ -n "${_amdgpu}" ]]; then
     log "检测到 AMD GPU (amdgpu 模块已加载)"
 
     # 尝试读取 ROCm 版本
