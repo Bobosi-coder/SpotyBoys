@@ -138,60 +138,6 @@ configure_postgres_password() {
     -c "ALTER USER postgres PASSWORD '${DB_PASSWORD}';" >/dev/null
 }
 
-install_awscli() {
-  AWS_BIN="${SCRIPT_DIR}/.venv/bin/aws"
-
-  if [ -f "${AWS_BIN}" ]; then
-    log "aws CLI is already installed: $("${AWS_BIN}" --version 2>&1)"
-    return
-  fi
-
-  log "Installing awscli into the uv environment"
-  uv pip install awscli
-}
-
-sync_remote_assets() {
-  if [ "${SYNC_REMOTE_ASSETS:-true}" != "true" ]; then
-    log "Skipping remote asset sync."
-    return
-  fi
-
-  install_awscli
-
-  AWS_BIN="${SCRIPT_DIR}/.venv/bin/aws"
-  AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-11580ec852704238a35acfbd65c7146a}"
-  AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-2759a133cae84a8e9a48c609c4dbc1b1}"
-  S3_ENDPOINT="${S3_ENDPOINT:-https://chi.tacc.chameleoncloud.org:7480}"
-  ARTIFACT_BUCKET="${ARTIFACT_BUCKET:-${ARTIFACT_STORAGE_BUCKET:-proj23-mlflow-artifacts}}"
-
-  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
-  export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore:Unverified HTTPS request}"
-
-  declare -A SYNC_TARGETS=(
-    ["data/"]="./data/"
-    ["panns/"]="./panns/"
-  )
-
-  local total=0
-  local count=0
-  local s3_prefix=""
-  local local_path=""
-  total=${#SYNC_TARGETS[@]}
-
-  for s3_prefix in "${!SYNC_TARGETS[@]}"; do
-    local_path="${SYNC_TARGETS[$s3_prefix]}"
-    count=$((count + 1))
-    mkdir -p "${local_path}"
-    log "[${count}/${total}] Syncing s3://${ARTIFACT_BUCKET}/${s3_prefix} -> ${local_path}"
-    "${AWS_BIN}" s3 sync \
-      "s3://${ARTIFACT_BUCKET}/${s3_prefix}" \
-      "${local_path}" \
-      --endpoint-url "${S3_ENDPOINT}" \
-      --no-verify-ssl \
-      --no-progress
-  done
-}
-
 init_database() {
   if [ "${INIT_DB:-true}" != "true" ]; then
     log "Skipping database initialization."
@@ -203,22 +149,6 @@ init_database() {
   bash "scripts/init_db.sh"
 }
 
-test_object_storage() {
-  install_awscli
-
-  AWS_BIN="${SCRIPT_DIR}/.venv/bin/aws"
-  AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-11580ec852704238a35acfbd65c7146a}"
-  AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-2759a133cae84a8e9a48c609c4dbc1b1}"
-  S3_ENDPOINT="${S3_ENDPOINT:-https://chi.tacc.chameleoncloud.org:7480}"
-
-  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
-  export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore:Unverified HTTPS request}"
-
-  log "Testing object storage connection..."
-  "${AWS_BIN}" s3 ls \
-    --endpoint-url "${S3_ENDPOINT}" \
-    --no-verify-ssl
-}
 
 main() {
   log "Working directory: ${SCRIPT_DIR}"
@@ -229,8 +159,8 @@ main() {
   start_postgres
   configure_postgres_password
   init_database
-  #sync_remote_assets
-  test_object_storage
+  log "AWS CLI installation is handled separately by scripts/install_awscli.sh"
+  log "Use scripts/download_remote_assets.sh when you want to download object-storage data."
   log "Setup complete."
 }
 

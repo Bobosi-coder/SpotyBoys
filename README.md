@@ -14,12 +14,19 @@ By default `setup.sh`:
 - creates `.env` from `.env.example` on first run
 - installs and starts PostgreSQL on apt-based systems when `psql` is missing
 - initializes the local `spotiboys` schema from `db/001_init.sql`
-- installs `awscli` into `.venv` and syncs `data/` and `panns/` from Chameleon S3
+
+AWS/object-storage responsibilities are intentionally separate:
+
+- `bash scripts/install_awscli.sh`
+  Installs AWS CLI into a dedicated venv for the current VM.
+- `source scripts/aws_env.sh`
+  Loads object-storage credentials and activates the AWS CLI environment.
+- `bash scripts/download_remote_assets.sh`
+  Downloads parsed CSV data from object storage when needed.
 
 ## Common Toggles
 
 ```bash
-SYNC_REMOTE_ASSETS=false bash setup.sh
 INSTALL_POSTGRES=false INIT_DB=false bash setup.sh
 RUN_INDEXES=true bash setup.sh
 ```
@@ -28,6 +35,28 @@ RUN_INDEXES=true bash setup.sh
 
 ```bash
 bash scripts/init_db.sh
+```
+
+## Object Storage Workflow
+
+Recommended order on a fresh VM:
+
+```bash
+bash scripts/install_awscli.sh
+bash setup.sh
+source scripts/aws_env.sh
+```
+
+Download parsed raw CSVs only when needed:
+
+```bash
+bash scripts/download_remote_assets.sh
+```
+
+You can also pass a custom remote prefix and local destination:
+
+```bash
+bash scripts/download_remote_assets.sh data/raw/content/30music_parsed/ ./data/raw/content/30music_parsed
 ```
 
 ## Release Workflows
