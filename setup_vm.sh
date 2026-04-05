@@ -62,10 +62,46 @@ log "依赖安装完成"
 echo ""
 
 # --------------------------------------------------------------------------- #
+# Step 2b: 安装适配当前 GPU 平台的 PyTorch
+# --------------------------------------------------------------------------- #
+log "========================================================"
+log "Step 2b/5: 检测 GPU 平台，安装正确的 PyTorch"
+log "========================================================"
+VENV_PIP="${SCRIPT_DIR}/.venv/bin/pip"
+
+if lsmod | grep -q amdgpu; then
+    log "检测到 AMD GPU (amdgpu 模块已加载)"
+
+    # 尝试读取 ROCm 版本
+    if [[ -f /opt/rocm/.info/version ]]; then
+        ROCM_FULL=$(cat /opt/rocm/.info/version)
+    elif command -v apt-cache &>/dev/null && apt-cache show rocm-libs 2>/dev/null | grep -oP 'Version: \K[\d.]+' | head -1; then
+        ROCM_FULL=$(apt-cache show rocm-libs 2>/dev/null | grep -oP 'Version: \K[\d.]+' | head -1)
+    else
+        ROCM_FULL="6.2.0"
+    fi
+    # 取大版本号 X.Y → rocmX.Y (PyTorch whl 命名规则)
+    ROCM_XY=$(echo "${ROCM_FULL}" | grep -oP '^\d+\.\d+')
+    log "ROCm 版本: ${ROCM_FULL}  →  使用 whl 索引: rocm${ROCM_XY}"
+
+    "${VENV_PIP}" install torch --index-url "https://download.pytorch.org/whl/rocm${ROCM_XY}" \
+        --quiet && log "PyTorch (ROCm ${ROCM_XY}) 安装完成" \
+        || log "WARNING: ROCm PyTorch 安装失败，将使用 CPU 版本"
+
+elif command -v nvidia-smi &>/dev/null; then
+    log "检测到 NVIDIA GPU — uv sync 已安装 CUDA PyTorch，无需额外操作"
+    nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>/dev/null || true
+
+else
+    log "未检测到 GPU — 将使用 CPU 训练"
+fi
+echo ""
+
+# --------------------------------------------------------------------------- #
 # Step 3: 安装 awscli (进 .venv)
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "Step 3/5: 配置 AWS CLI"
+log "Step 3/6: 配置 AWS CLI"
 log "========================================================"
 AWS_BIN="${SCRIPT_DIR}/.venv/bin/aws"
 if [[ ! -f "${AWS_BIN}" ]]; then
@@ -81,7 +117,7 @@ echo ""
 # Step 4: 创建目录
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "Step 4/5: 创建 artifact 目录"
+log "Step 4/6: 创建 artifact 目录"
 log "========================================================"
 mkdir -p \
     artifacts/item2vec \
@@ -95,7 +131,7 @@ echo ""
 # Step 5: 从 S3 下载训练所需 artifacts
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "Step 5/5: 从 S3 下载 artifacts"
+log "Step 5/6: 从 S3 下载 artifacts"
 log "========================================================"
 
 s3_download() {
