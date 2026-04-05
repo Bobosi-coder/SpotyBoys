@@ -21,9 +21,6 @@ panns/
 # Logs
 logs/
 
-# Analysis Docs
-doc/
-
 # OS Files
 .DS_Store
 

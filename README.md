@@ -30,9 +30,25 @@ RUN_INDEXES=true bash setup.sh
 bash scripts/init_db.sh
 ```
 
+## Release Workflows
+
+Versioned data releases for the initial implementation:
+
+```bash
+bash scripts/run_item2vec_release.sh
+bash scripts/run_retriever_release.sh
+```
+
+Published object-storage prefixes:
+
+- `processed/item2vec/{dataset_version}/`
+- `features/retriever/{feature_version}/`
+- `manifests/releases/...`
+
 ## Project Notes
 
 - Item2Vec code lives under `src/item2vec/`
 - Retriever code lives under `src/retriever/`
+- Data release helpers live under `src/data_release/`
 - Data preprocessing notes live in `data_preprocess_pipeline.md`
 - Item2Vec pipeline notes live in `item2vec_pipeline.md`
