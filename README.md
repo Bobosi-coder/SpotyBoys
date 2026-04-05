@@ -5,10 +5,14 @@ This branch is based on `feature/item2vec-embedding` and keeps the local databas
 ## Quick Start
 
 ```bash
+bash scripts/install_awscli.sh
 bash setup.sh
+source scripts/aws_env.sh
 ```
 
-By default `setup.sh`:
+This is the recommended flow on a fresh Chameleon VM.
+
+`setup.sh`:
 
 - installs `uv` if needed and runs `uv sync`
 - creates `.env` from `.env.example` on first run

@@ -1,15 +1,25 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+IS_SOURCED=0
+
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  IS_SOURCED=1
+fi
+
+fail() {
+  echo "[aws-env] ERROR: $*" >&2
+  if [ "$IS_SOURCED" -eq 1 ]; then
+    return 1
+  fi
+  exit 1
+}
 
 echo "[aws-env] Loading project environment..."
 
 if [ ! -f "$ROOT_DIR/.env" ]; then
-  echo "[aws-env] ERROR: $ROOT_DIR/.env not found"
-  echo "[aws-env] Create .env first."
-  return 1 2>/dev/null || exit 1
+  fail "$ROOT_DIR/.env not found. Create .env first."
 fi
 
 set -a
@@ -21,26 +31,36 @@ VENV_PATH="${AWSCLI_VENV_PATH:-$HOME/awscli-venv}"
 ARTIFACT_BUCKET="${ARTIFACT_BUCKET:-${ARTIFACT_STORAGE_BUCKET:-proj23-mlflow-artifacts}}"
 
 if [ ! -d "$VENV_PATH" ]; then
-  echo "[aws-env] ERROR: awscli venv not found at $VENV_PATH"
-  echo "[aws-env] Run: bash scripts/install_awscli.sh"
-  return 1 2>/dev/null || exit 1
+  fail "awscli venv not found at $VENV_PATH. Run: bash scripts/install_awscli.sh"
 fi
 
 # shellcheck disable=SC1090
 source "$VENV_PATH/bin/activate"
 
 if ! command -v aws >/dev/null 2>&1; then
-  echo "[aws-env] ERROR: aws not found in venv"
-  echo "[aws-env] Run: bash scripts/install_awscli.sh"
-  return 1 2>/dev/null || exit 1
+  fail "aws not found in venv. Run: bash scripts/install_awscli.sh"
 fi
 
-: "${AWS_ACCESS_KEY_ID:?AWS_ACCESS_KEY_ID is not set}"
-: "${AWS_SECRET_ACCESS_KEY:?AWS_SECRET_ACCESS_KEY is not set}"
-: "${S3_ENDPOINT:?S3_ENDPOINT is not set}"
-: "${ARTIFACT_BUCKET:?ARTIFACT_BUCKET is not set}"
+if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+  echo "[aws-env] Your .env file does not have object-storage credentials yet." >&2
+  echo "[aws-env] Add these lines to $ROOT_DIR/.env and try again:" >&2
+  echo "AWS_ACCESS_KEY_ID=..." >&2
+  echo "AWS_SECRET_ACCESS_KEY=..." >&2
+  fail "AWS credentials are missing."
+fi
+
+if [ -z "${S3_ENDPOINT:-}" ]; then
+  fail "S3_ENDPOINT is not set in $ROOT_DIR/.env"
+fi
+
+if [ -z "${ARTIFACT_BUCKET:-}" ]; then
+  fail "ARTIFACT_BUCKET is not set in $ROOT_DIR/.env"
+fi
 
 export ARTIFACT_BUCKET
+export AWS_ACCESS_KEY_ID
+export AWS_SECRET_ACCESS_KEY
+export S3_ENDPOINT
 export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore:Unverified HTTPS request}"
 export AWS_PAGER="${AWS_PAGER:-}"
 

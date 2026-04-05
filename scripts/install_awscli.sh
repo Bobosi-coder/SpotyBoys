@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+if [ -f "$ROOT_DIR/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT_DIR/.env"
+  set +a
+fi
+
 VENV_PATH="${AWSCLI_VENV_PATH:-$HOME/awscli-venv}"
 
 echo "[install-awscli] Installing prerequisites..."
@@ -28,3 +38,4 @@ echo "[install-awscli] Done."
 echo "[install-awscli] Next steps:"
 echo "  1) bash setup.sh"
 echo "  2) source scripts/aws_env.sh"
+echo "  3) bash scripts/download_remote_assets.sh   # optional"
