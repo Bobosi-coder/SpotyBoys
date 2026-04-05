@@ -40,10 +40,21 @@ log "Working directory: ${SCRIPT_DIR}"
 log "========================================================"
 log "Step 1/5: 安装 uv"
 log "========================================================"
+
+# 确保 ~/.local/bin 在 PATH 中（uv 安装后写在这里）
+export PATH="${HOME}/.local/bin:${PATH}"
+
+# 写入 ~/.bashrc，后续 SSH 登录也能直接用 uv
+if ! grep -q '\.local/bin' "${HOME}/.bashrc" 2>/dev/null; then
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> "${HOME}/.bashrc"
+    log "已将 ~/.local/bin 写入 ~/.bashrc"
+fi
+
 if ! command -v uv &>/dev/null; then
     log "uv 未找到，正在安装..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="${HOME}/.local/bin:${PATH}"
+    # installer 可能写了 env 文件，source 一下确保当前 shell 生效
+    [[ -f "${HOME}/.local/bin/env" ]] && source "${HOME}/.local/bin/env" || true
     log "uv 安装完成: $(uv --version)"
 else
     log "uv 已安装: $(uv --version)"
@@ -75,14 +86,13 @@ if lsmod | grep -q amdgpu; then
     # 尝试读取 ROCm 版本
     if [[ -f /opt/rocm/.info/version ]]; then
         ROCM_FULL=$(cat /opt/rocm/.info/version)
-    elif command -v apt-cache &>/dev/null && apt-cache show rocm-libs 2>/dev/null | grep -oP 'Version: \K[\d.]+' | head -1; then
-        ROCM_FULL=$(apt-cache show rocm-libs 2>/dev/null | grep -oP 'Version: \K[\d.]+' | head -1)
+    elif ROCM_FULL=$(apt-cache show rocm-libs 2>/dev/null | grep -oP 'Version: \K[\d.]+' | head -1) && [[ -n "${ROCM_FULL}" ]]; then
+        :
     else
         ROCM_FULL="6.2.0"
     fi
-    # 取大版本号 X.Y → rocmX.Y (PyTorch whl 命名规则)
     ROCM_XY=$(echo "${ROCM_FULL}" | grep -oP '^\d+\.\d+')
-    log "ROCm 版本: ${ROCM_FULL}  →  使用 whl 索引: rocm${ROCM_XY}"
+    log "ROCm 版本: ${ROCM_FULL}  →  whl 索引: rocm${ROCM_XY}"
 
     "${VENV_PIP}" install torch --index-url "https://download.pytorch.org/whl/rocm${ROCM_XY}" \
         --quiet && log "PyTorch (ROCm ${ROCM_XY}) 安装完成" \
@@ -98,26 +108,10 @@ fi
 echo ""
 
 # --------------------------------------------------------------------------- #
-# Step 3: 安装 awscli (进 .venv)
+# Step 3: 创建目录
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "Step 3/6: 配置 AWS CLI"
-log "========================================================"
-AWS_BIN="${SCRIPT_DIR}/.venv/bin/aws"
-if [[ ! -f "${AWS_BIN}" ]]; then
-    log "安装 awscli 到 .venv..."
-    uv pip install awscli
-    log "awscli 安装完成"
-else
-    log "awscli 已安装: $("${AWS_BIN}" --version 2>&1)"
-fi
-echo ""
-
-# --------------------------------------------------------------------------- #
-# Step 4: 创建目录
-# --------------------------------------------------------------------------- #
-log "========================================================"
-log "Step 4/6: 创建 artifact 目录"
+log "Step 3/5: 创建 artifact 目录"
 log "========================================================"
 mkdir -p \
     artifacts/item2vec \
@@ -128,10 +122,20 @@ log "目录创建完成"
 echo ""
 
 # --------------------------------------------------------------------------- #
+# Step 4: 验证 AWS 凭证
+# --------------------------------------------------------------------------- #
+log "========================================================"
+log "Step 4/5: 验证 AWS 凭证"
+log "========================================================"
+[[ -n "${AWS_ACCESS_KEY_ID:-}"     ]] || die "AWS_ACCESS_KEY_ID 未设置，请先 export"
+[[ -n "${AWS_SECRET_ACCESS_KEY:-}" ]] || die "AWS_SECRET_ACCESS_KEY 未设置，请先 export"
+log "AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:0:8}****"
+
+# --------------------------------------------------------------------------- #
 # Step 5: 从 S3 下载训练所需 artifacts
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "Step 5/6: 从 S3 下载 artifacts"
+log "Step 5/5: 从 S3 下载 artifacts"
 log "========================================================"
 
 s3_download() {
@@ -139,35 +143,39 @@ s3_download() {
     if [[ -f "$dst" ]]; then
         log "SKIP (已存在): $dst"
     else
-        log "Downloading: $(basename $dst) ..."
-        "${AWS_BIN}" s3 cp "s3://${S3_BUCKET}/${src}" "$dst" \
+        log "Downloading: $(basename "$dst") ..."
+        aws \
             --endpoint-url "${S3_ENDPOINT}" \
             --no-verify-ssl \
+            s3 cp "s3://${S3_BUCKET}/${src}" "$dst" \
             --no-progress
-        log "OK: $dst  ($(du -sh $dst | cut -f1))"
+        log "OK: $dst  ($(du -sh "$dst" | cut -f1))"
     fi
 }
 
 # Item2Vec 嵌入矩阵 (365 MB)
-s3_download "artifacts/item2vec/item2vec_128d.npy"          artifacts/item2vec/item2vec_128d.npy
+s3_download "artifacts/item2vec/item2vec_128d.npy"           artifacts/item2vec/item2vec_128d.npy
 
 # Track ID → 矩阵行号映射 (13 MB)
-s3_download "artifacts/item2vec/item2vec_track_to_row.json" artifacts/item2vec/item2vec_track_to_row.json
+s3_download "artifacts/item2vec/item2vec_track_to_row.json"  artifacts/item2vec/item2vec_track_to_row.json
 
 # 用户偏好聚类 (110 MB)
 s3_download "artifacts/retriever/pref_nn/user_centroids.pkl" artifacts/retriever/pref_nn/user_centroids.pkl
 
-# Ranker 训练数据 (~4-5 GB)
-s3_download "artifacts/ranker/ranker_train.parquet" artifacts/ranker/ranker_train.parquet
+# Ranker 训练数据 (~945 MB)
+s3_download "artifacts/ranker/ranker_train.parquet"          artifacts/ranker/ranker_train.parquet
 
-# Ranker 验证数据 (~30 MB)
-s3_download "artifacts/ranker/ranker_val.parquet"   artifacts/ranker/ranker_val.parquet
+# Ranker 验证数据 (~25 MB)
+s3_download "artifacts/ranker/ranker_val.parquet"            artifacts/ranker/ranker_val.parquet
 
-# MLflow 数据库 (实验/run 元数据)
+# MLflow 数据库
 if [[ ! -f mlflow.db ]]; then
     log "Downloading mlflow.db ..."
-    "${AWS_BIN}" s3 cp "s3://${S3_BUCKET}/mlflow.db" mlflow.db \
-        --endpoint-url "${S3_ENDPOINT}" --no-verify-ssl --no-progress
+    aws \
+        --endpoint-url "${S3_ENDPOINT}" \
+        --no-verify-ssl \
+        s3 cp "s3://${S3_BUCKET}/mlflow.db" mlflow.db \
+        --no-progress
     log "OK: mlflow.db"
 else
     log "SKIP (已存在): mlflow.db"
