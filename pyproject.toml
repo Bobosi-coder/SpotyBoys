@@ -3,7 +3,7 @@ name = "mlops"
 version = "0.1.0"
 description = "SpotyBoys local data engineering pipeline (no Docker required)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = "==3.12.*"
 dependencies = [
     "gensim>=4.4.0",
     "librosa>=0.11.0",
@@ -21,3 +21,11 @@ dependencies = [
 
 [project.scripts]
 mlops-pipeline = "main:main"
+
+# AMD ROCm: torch 从 ROCm wheel index 安装，不使用 PyPI 默认的 CUDA 版本
+[tool.uv.sources]
+torch = { index = "pytorch-rocm" }
+
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm6.3"

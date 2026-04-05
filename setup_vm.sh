@@ -2,10 +2,15 @@
 # =============================================================================
 # setup_vm.sh — VM 环境准备 + Ranker 训练数据下载
 #
+# 此分支 (feature/amd-gpu-support) 专为 AMD ROCm GPU 优化:
+#   - Python 3.12
+#   - torch 2.9.1+rocm6.3 (通过 uv lock 直接安装，无需事后补装)
+#
+# NVIDIA GPU 请使用 feature/item2vec-embedding 分支。
+#
 # 使用方法:
 #   git clone <repo_url> && cd <repo_dir>
-#   export AWS_ACCESS_KEY_ID=<your_key>
-#   export AWS_SECRET_ACCESS_KEY=<your_secret>
+#   git checkout feature/amd-gpu-support
 #   bash setup_vm.sh
 #
 # 完成后:
@@ -75,36 +80,17 @@ log "依赖安装完成"
 echo ""
 
 # --------------------------------------------------------------------------- #
-# Step 2b: 安装适配当前 GPU 平台的 PyTorch
+# Step 2b: 确认 GPU 可见（信息输出）
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "Step 2b/5: 检测 GPU 平台，安装正确的 PyTorch"
+log "Step 2b/4: 检测 GPU 平台 (torch ROCm 6.3 已内置于 lock 文件)"
 log "========================================================"
-VENV_PIP="${SCRIPT_DIR}/.venv/bin/pip"
-
 _amdgpu=$(lsmod | grep amdgpu || true)
 if [[ -n "${_amdgpu}" ]]; then
-    log "检测到 AMD GPU (amdgpu 模块已加载)"
-
-    # 尝试读取 ROCm 版本
-    if [[ -f /opt/rocm/.info/version ]]; then
-        ROCM_FULL=$(cat /opt/rocm/.info/version)
-    elif ROCM_FULL=$(apt-cache show rocm-libs 2>/dev/null | grep -oP 'Version: \K[\d.]+' | head -1) && [[ -n "${ROCM_FULL}" ]]; then
-        :
-    else
-        ROCM_FULL="6.2.0"
-    fi
-    ROCM_XY=$(echo "${ROCM_FULL}" | grep -oP '^\d+\.\d+')
-    log "ROCm 版本: ${ROCM_FULL}  →  whl 索引: rocm${ROCM_XY}"
-
-    "${VENV_PIP}" install torch --index-url "https://download.pytorch.org/whl/rocm${ROCM_XY}" \
-        --quiet && log "PyTorch (ROCm ${ROCM_XY}) 安装完成" \
-        || log "WARNING: ROCm PyTorch 安装失败，将使用 CPU 版本"
-
+    log "检测到 AMD GPU (amdgpu 模块已加载) — torch+rocm6.3 已由 uv sync 安装"
 elif command -v nvidia-smi &>/dev/null; then
-    log "检测到 NVIDIA GPU — uv sync 已安装 CUDA PyTorch，无需额外操作"
-    nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader 2>/dev/null || true
-
+    log "WARNING: 检测到 NVIDIA GPU，此分支为 AMD ROCm 优化，建议切换到 feature/item2vec-embedding 分支"
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null || true
 else
     log "未检测到 GPU — 将使用 CPU 训练"
 fi
