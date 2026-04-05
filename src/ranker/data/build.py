@@ -114,20 +114,39 @@ def _build_neg_weights(tid2idx: dict, r2t: list, N: int) -> np.ndarray:
     return (powered / powered.sum()).astype(np.float32)
 
 
+def _build_cooc_neighbors(C_sess: sp.csr_matrix, r2t: list) -> list[list]:
+    """
+    Pre-compute per-row neighbor list from C_sess sorted by co-occurrence weight.
+    Returns a list of length N where neighbors[i] = [track_id, ...] (descending weight).
+    Much faster than calling C_sess.getrow(i).tocoo() per context at build time.
+    """
+    log.info("  Pre-computing cooc neighbor lists...")
+    N = C_sess.shape[0]
+    neighbors: list[list] = [[] for _ in range(N)]
+    csr = C_sess.tocsr()
+    for i in range(N):
+        start = csr.indptr[i]
+        end   = csr.indptr[i + 1]
+        if end == start:
+            continue
+        cols = csr.indices[start:end]
+        data = csr.data[start:end]
+        order = np.argsort(-data)
+        neighbors[i] = [r2t[cols[j]] for j in order]
+    log.info("  Cooc neighbor lists ready.")
+    return neighbors
+
+
 def _hard_negs(
-    C_sess: sp.csr_matrix,
+    cooc_neighbors: list[list],
     last_idx: int,
-    r2t: list,
     exclude: set,
 ) -> list:
-    """Up to N_HARD hard negatives from C_sess row of last prefix track."""
-    row = C_sess.getrow(last_idx).tocoo()
-    if row.nnz == 0:
+    """Up to N_HARD hard negatives from pre-computed cooc_neighbors of last prefix track."""
+    if last_idx < 0 or last_idx >= len(cooc_neighbors):
         return []
-    order = np.argsort(-row.data)
     hard = []
-    for si in order:
-        tid = r2t[row.col[si]]
+    for tid in cooc_neighbors[last_idx]:
         if tid not in exclude:
             hard.append(tid)
             exclude.add(tid)
@@ -136,32 +155,52 @@ def _hard_negs(
     return hard
 
 
-def _rand_negs(
-    rng: np.random.Generator,
-    N: int,
-    neg_weights: np.ndarray,
-    r2t: list,
-    exclude: set,
-    n_needed: int,
-) -> list:
-    """Sample n_needed random negatives not in exclude."""
-    rand = []
-    for _ in range(n_needed * 100):   # generous retry budget
-        idx = int(rng.choice(N, p=neg_weights))
-        tid = r2t[idx]
-        if tid not in exclude:
-            rand.append(tid)
-            exclude.add(tid)
-            if len(rand) == n_needed:
-                return rand
-    # Extremely rare fallback: sequential scan
-    for i in range(N):
-        if r2t[i] not in exclude:
-            rand.append(r2t[i])
-            exclude.add(r2t[i])
-            if len(rand) == n_needed:
+# Pool size for batch pre-sampling of random negatives
+_RAND_POOL_SIZE = 2_000_000
+
+class _RandNegSampler:
+    """
+    Efficient random negative sampler using a pre-sampled pool.
+    Avoids calling rng.choice(N, p=weights) one-at-a-time (O(N) per call).
+    """
+    def __init__(self, rng: np.random.Generator, N: int, neg_weights: np.ndarray, r2t: list):
+        self._rng       = rng
+        self._N         = N
+        self._weights   = neg_weights
+        self._r2t       = r2t
+        self._pool: np.ndarray = np.empty(0, dtype=np.int64)
+        self._pos       = 0
+        self._refill()
+
+    def _refill(self) -> None:
+        self._pool = self._rng.choice(self._N, size=_RAND_POOL_SIZE,
+                                      replace=True, p=self._weights)
+        self._pos  = 0
+
+    def sample(self, exclude: set, n_needed: int) -> list:
+        rand = []
+        attempts = 0
+        while len(rand) < n_needed:
+            if self._pos >= len(self._pool):
+                self._refill()
+            idx = int(self._pool[self._pos])
+            self._pos += 1
+            tid = self._r2t[idx]
+            if tid not in exclude:
+                rand.append(tid)
+                exclude.add(tid)
+            attempts += 1
+            if attempts > n_needed * 200:   # safety fallback
                 break
-    return rand
+        # Extremely rare fallback: sequential scan
+        if len(rand) < n_needed:
+            for i in range(self._N):
+                if self._r2t[i] not in exclude:
+                    rand.append(self._r2t[i])
+                    exclude.add(self._r2t[i])
+                    if len(rand) == n_needed:
+                        break
+        return rand
 
 
 def _make_prefix(
@@ -251,6 +290,7 @@ def _build_split(
     N: int,
     neg_weights: np.ndarray,
     C_sess: sp.csr_matrix,
+    cooc_neighbors: list,
     rng: np.random.Generator,
     out_path: str,
     is_val: bool,
@@ -262,6 +302,8 @@ def _build_split(
     Train mode: one context per position t = 0 .. N_seq-3, positive = tracks[t+1]
     Val mode:   one context per session,  positive = tracks[-1]
     """
+    rand_sampler = _RandNegSampler(rng, N, neg_weights, r2t)
+
     boundaries = np.concatenate(
         ([0], np.where(np.diff(sids) != 0)[0] + 1, [len(sids)])
     )
@@ -274,6 +316,8 @@ def _build_split(
     ctx_ctr = 0
     n_sess = 0
     n_rows = 0
+    t_start = time.time()
+    LOG_EVERY = 100_000   # log progress every N sessions processed
 
     for i in range(n_all):
         if max_sessions is not None and n_sess >= max_sessions:
@@ -287,6 +331,13 @@ def _build_split(
             continue
 
         n_sess += 1
+        if n_sess % LOG_EVERY == 0:
+            elapsed = time.time() - t_start
+            log.info(
+                f"  [{split_name}] {n_sess:,} sessions  {ctx_ctr:,} contexts  "
+                f"{n_rows:,} rows  ({elapsed:.0f}s)"
+            )
+
         uid   = int(uids[start])
         seq_t = tids[start:end].tolist()
         seq_l = labels[start:end].tolist()
@@ -312,8 +363,8 @@ def _build_split(
 
             last_prefix_idx = tid2idx.get(seq_t[-2], -1)
             exclude = {anchor_tid}
-            hard = _hard_negs(C_sess, last_prefix_idx, r2t, exclude) if last_prefix_idx >= 0 else []
-            rand = _rand_negs(rng, N, neg_weights, r2t, exclude, N_NEG - len(hard))
+            hard = _hard_negs(cooc_neighbors, last_prefix_idx, exclude)
+            rand = rand_sampler.sample(exclude, N_NEG - len(hard))
             negs = hard + rand
 
             _append_context(batch, ctx_ctr, sid, uid, pid, plab, plen,
@@ -342,8 +393,8 @@ def _build_split(
 
                 last_idx = tid2idx.get(seq_t[t], -1)
                 exclude  = {anchor_tid}
-                hard = _hard_negs(C_sess, last_idx, r2t, exclude) if last_idx >= 0 else []
-                rand = _rand_negs(rng, N, neg_weights, r2t, exclude, N_NEG - len(hard))
+                hard = _hard_negs(cooc_neighbors, last_idx, exclude)
+                rand = rand_sampler.sample(exclude, N_NEG - len(hard))
                 negs = hard + rand
 
                 _append_context(batch, ctx_ctr, sid, uid, pid, plab, plen,
@@ -393,6 +444,7 @@ def run(
     log.info("Loading C_sess...")
     C_sess = sp.load_npz(os.path.join(COOC_DIR, "cooc_session.npz"))
     log.info(f"  C_sess: {C_sess.shape}  nnz={C_sess.nnz:,}")
+    cooc_neighbors = _build_cooc_neighbors(C_sess, r2t)
 
     # ── Split sets ─────────────────────────────────────────────────────────
     log.info("Loading split sets...")
@@ -425,7 +477,7 @@ def run(
     log.info("── Building train data ──")
     train_m = _build_split(
         "train", train_set, tids, sids, uids, labels,
-        tid2idx, r2t, N, neg_weights, C_sess, rng,
+        tid2idx, r2t, N, neg_weights, C_sess, cooc_neighbors, rng,
         out_path=os.path.join(OUT_DIR, "ranker_train.parquet"),
         is_val=False, max_sessions=max_train_sessions,
     )
@@ -434,7 +486,7 @@ def run(
     log.info("── Building val data ──")
     val_m = _build_split(
         "val", val_set, tids, sids, uids, labels,
-        tid2idx, r2t, N, neg_weights, C_sess, rng,
+        tid2idx, r2t, N, neg_weights, C_sess, cooc_neighbors, rng,
         out_path=os.path.join(OUT_DIR, "ranker_val.parquet"),
         is_val=True, max_sessions=max_val_sessions,
     )
