@@ -1,141 +1,165 @@
 #!/usr/bin/env bash
 # =============================================================================
-# setup_vm.sh — Spoty Boys VM Initialization Script
+# setup_vm.sh — VM 环境准备 + Ranker 训练数据下载
 #
-# Steps:
-#   1. Install uv (Python package manager) if not already present
-#   2. Run `uv sync` to install all project dependencies
-#   3. Install awscli into the project virtualenv if not already present
-#   4. Download data/ and panns/ from Chameleon S3
-#
-# No manual configuration required — just run this script from the project root.
-#
-# Usage:
+# 使用方法:
+#   git clone <repo_url> && cd <repo_dir>
+#   export AWS_ACCESS_KEY_ID=<your_key>
+#   export AWS_SECRET_ACCESS_KEY=<your_secret>
 #   bash setup_vm.sh
+#
+# 完成后:
+#   uv run python -m src.ranker.train 2>&1 | tee logs/ranker_train.log
+#
+# 训练结束后上传结果:
+#   bash upload_results.sh
 # =============================================================================
 
 set -euo pipefail
 
 # --------------------------------------------------------------------------- #
-# Utility functions
+# 配置
 # --------------------------------------------------------------------------- #
-log()  { echo "[setup_vm] $*"; }
-die()  { echo "[setup_vm] ERROR: $*" >&2; exit 1; }
+S3_BUCKET="proj23-mlflow-artifacts"
+S3_ENDPOINT="https://chi.tacc.chameleoncloud.org:7480"
+export PYTHONWARNINGS="ignore:Unverified HTTPS request"
 
 # --------------------------------------------------------------------------- #
-# Ensure the working directory is the project root (same dir as this script)
+# 工具函数
 # --------------------------------------------------------------------------- #
+log() { echo "[$(date '+%H:%M:%S')] $*"; }
+die() { echo "ERROR: $*" >&2; exit 1; }
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 log "Working directory: ${SCRIPT_DIR}"
 
 # --------------------------------------------------------------------------- #
-# Step 1: Install uv if not already available
+# Step 1: 安装 uv
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "Step 1: Setting up uv"
+log "Step 1/5: 安装 uv"
 log "========================================================"
-
 if ! command -v uv &>/dev/null; then
-    log "uv not found. Installing via official installer..."
+    log "uv 未找到，正在安装..."
     curl -LsSf https://astral.sh/uv/install.sh | sh
-
-    # Make uv available in the current shell session immediately after install
     export PATH="${HOME}/.local/bin:${PATH}"
-    log "uv installed: $(uv --version)"
+    log "uv 安装完成: $(uv --version)"
 else
-    log "uv is already installed: $(uv --version)"
+    log "uv 已安装: $(uv --version)"
 fi
-
 echo ""
 
 # --------------------------------------------------------------------------- #
-# Step 2: Sync project dependencies via uv
+# Step 2: 安装 Python 依赖
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "Step 2: Installing project dependencies (uv sync)"
+log "Step 2/5: 安装 Python 依赖 (uv sync)"
 log "========================================================"
-
-if [[ ! -f "pyproject.toml" ]]; then
-    die "pyproject.toml not found. Make sure you are running this script from the project root."
-fi
-
+[[ -f "pyproject.toml" ]] || die "pyproject.toml 未找到，请在项目根目录运行此脚本"
 uv sync
-log "Dependencies installed successfully."
+log "依赖安装完成"
 echo ""
 
 # --------------------------------------------------------------------------- #
-# Step 3: Install awscli into the project virtualenv
+# Step 3: 安装 awscli (进 .venv)
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "Step 3: Setting up aws CLI"
+log "Step 3/5: 配置 AWS CLI"
+log "========================================================"
+AWS_BIN="${SCRIPT_DIR}/.venv/bin/aws"
+if [[ ! -f "${AWS_BIN}" ]]; then
+    log "安装 awscli 到 .venv..."
+    uv pip install awscli
+    log "awscli 安装完成"
+else
+    log "awscli 已安装: $("${AWS_BIN}" --version 2>&1)"
+fi
+echo ""
+
+# --------------------------------------------------------------------------- #
+# Step 4: 创建目录
+# --------------------------------------------------------------------------- #
+log "========================================================"
+log "Step 4/5: 创建 artifact 目录"
+log "========================================================"
+mkdir -p \
+    artifacts/item2vec \
+    artifacts/retriever/pref_nn \
+    artifacts/ranker \
+    logs
+log "目录创建完成"
+echo ""
+
+# --------------------------------------------------------------------------- #
+# Step 5: 从 S3 下载训练所需 artifacts
+# --------------------------------------------------------------------------- #
+log "========================================================"
+log "Step 5/5: 从 S3 下载 artifacts"
 log "========================================================"
 
-# uv creates the virtualenv at .venv/ — use the binary directly from there
-# so we never rely on the venv being activated in the current shell session
-AWS_BIN="${SCRIPT_DIR}/.venv/bin/aws"
+s3_download() {
+    local src="$1" dst="$2"
+    if [[ -f "$dst" ]]; then
+        log "SKIP (已存在): $dst"
+    else
+        log "Downloading: $(basename $dst) ..."
+        "${AWS_BIN}" s3 cp "s3://${S3_BUCKET}/${src}" "$dst" \
+            --endpoint-url "${S3_ENDPOINT}" \
+            --no-verify-ssl \
+            --no-progress
+        log "OK: $dst  ($(du -sh $dst | cut -f1))"
+    fi
+}
 
-if [[ ! -f "${AWS_BIN}" ]]; then
-    log "aws CLI not found in .venv. Installing via uv pip..."
-    uv pip install awscli
-    log "awscli installed successfully."
+# Item2Vec 嵌入矩阵 (365 MB)
+s3_download "artifacts/item2vec/item2vec_128d.npy"          artifacts/item2vec/item2vec_128d.npy
+
+# Track ID → 矩阵行号映射 (13 MB)
+s3_download "artifacts/item2vec/item2vec_track_to_row.json" artifacts/item2vec/item2vec_track_to_row.json
+
+# 用户偏好聚类 (110 MB)
+s3_download "artifacts/retriever/pref_nn/user_centroids.pkl" artifacts/retriever/pref_nn/user_centroids.pkl
+
+# Ranker 训练数据 (~4-5 GB)
+s3_download "artifacts/ranker/ranker_train.parquet" artifacts/ranker/ranker_train.parquet
+
+# Ranker 验证数据 (~30 MB)
+s3_download "artifacts/ranker/ranker_val.parquet"   artifacts/ranker/ranker_val.parquet
+
+# MLflow 数据库 (实验/run 元数据)
+if [[ ! -f mlflow.db ]]; then
+    log "Downloading mlflow.db ..."
+    "${AWS_BIN}" s3 cp "s3://${S3_BUCKET}/mlflow.db" mlflow.db \
+        --endpoint-url "${S3_ENDPOINT}" --no-verify-ssl --no-progress
+    log "OK: mlflow.db"
 else
-    log "aws CLI is already installed: $("${AWS_BIN}" --version 2>&1)"
+    log "SKIP (已存在): mlflow.db"
 fi
 
 echo ""
 
 # --------------------------------------------------------------------------- #
-# Step 4: Download data/ and panns/ from Chameleon S3
+# 完成
 # --------------------------------------------------------------------------- #
 log "========================================================"
-log "Step 4: Downloading assets from S3"
+log "Setup 完成！Artifact 大小:"
 log "========================================================"
-
-# S3 credentials and endpoint
-export AWS_ACCESS_KEY_ID="11580ec852704238a35acfbd65c7146a"
-export AWS_SECRET_ACCESS_KEY="2759a133cae84a8e9a48c609c4dbc1b1"
-
-S3_ENDPOINT="https://chi.tacc.chameleoncloud.org:7480"
-BUCKET="proj23-mlflow-artifacts"
-
-# Mapping of S3 prefixes to local destination paths (relative to project root)
-declare -A SYNC_TARGETS=(
-    ["data/"]="./data/"
-    ["panns/"]="./panns/"
-)
-
-# Suppress InsecureRequestWarning produced by --no-verify-ssl
-# (Chameleon's Swift S3 gateway uses a self-signed certificate; this is expected)
-export PYTHONWARNINGS="ignore:Unverified HTTPS request"
-
-TOTAL=${#SYNC_TARGETS[@]}
-COUNT=0
-
-for S3_PREFIX in "${!SYNC_TARGETS[@]}"; do
-    LOCAL_PATH="${SYNC_TARGETS[$S3_PREFIX]}"
-    COUNT=$((COUNT + 1))
-    log "[${COUNT}/${TOTAL}] s3://${BUCKET}/${S3_PREFIX}  ->  ${LOCAL_PATH}"
-
-    # Create the local directory if it does not exist
-    mkdir -p "${LOCAL_PATH}"
-
-    # Use the full path to aws binary inside .venv to avoid PATH issues
-    "${AWS_BIN}" s3 sync \
-        "s3://${BUCKET}/${S3_PREFIX}" \
-        "${LOCAL_PATH}" \
-        --endpoint-url "${S3_ENDPOINT}" \
-        --no-verify-ssl \
-        --no-progress
-
-    FILE_COUNT=$(find "${LOCAL_PATH}" -type f | wc -l | tr -d ' ')
-    log "Done: ${LOCAL_PATH} (${FILE_COUNT} files total)"
-    echo ""
-done
-
-# --------------------------------------------------------------------------- #
-# All done
-# --------------------------------------------------------------------------- #
-log "========================================================"
-log "VM setup complete. Environment is ready."
-log "========================================================"
+du -sh \
+    artifacts/item2vec/item2vec_128d.npy \
+    artifacts/item2vec/item2vec_track_to_row.json \
+    artifacts/retriever/pref_nn/user_centroids.pkl \
+    artifacts/ranker/ranker_train.parquet \
+    artifacts/ranker/ranker_val.parquet \
+    2>/dev/null
+echo ""
+echo "========================================================"
+echo "开始训练 (默认: 3 epochs, batch=512, 自动检测 GPU):"
+echo "  uv run python -m src.ranker.train 2>&1 | tee logs/ranker_train.log"
+echo ""
+echo "自定义超参示例:"
+echo "  uv run python -m src.ranker.train --epochs 5 --batch-size 256 --device cuda"
+echo ""
+echo "训练完成后上传结果到 S3:"
+echo "  bash upload_results.sh"
+echo "========================================================"
