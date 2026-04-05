@@ -203,6 +203,23 @@ init_database() {
   bash "scripts/init_db.sh"
 }
 
+test_object_storage() {
+  install_awscli
+
+  AWS_BIN="${SCRIPT_DIR}/.venv/bin/aws"
+  AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-11580ec852704238a35acfbd65c7146a}"
+  AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-2759a133cae84a8e9a48c609c4dbc1b1}"
+  S3_ENDPOINT="${S3_ENDPOINT:-https://chi.tacc.chameleoncloud.org:7480}"
+
+  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
+  export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore:Unverified HTTPS request}"
+
+  log "Testing object storage connection..."
+  "${AWS_BIN}" s3 ls \
+    --endpoint-url "${S3_ENDPOINT}" \
+    --no-verify-ssl
+}
+
 main() {
   log "Working directory: ${SCRIPT_DIR}"
   ensure_env_file
@@ -212,7 +229,8 @@ main() {
   start_postgres
   configure_postgres_password
   init_database
-  sync_remote_assets
+  #sync_remote_assets
+  test_object_storage
   log "Setup complete."
 }
 
