@@ -1,53 +1,38 @@
-# SpotyBoys MLOps Pipeline (Local)
+# SpotyBoys Item2Vec Workspace
 
-This project runs directly on your local Python environment with `uv`. Docker is not required.
+This branch is based on `feature/item2vec-embedding` and keeps the local database bootstrap files from the cleanup work.
 
-## 0. Install uv (if needed)
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
-
-## 1. Setup with uv
+## Quick Start
 
 ```bash
-uv sync
+bash setup.sh
 ```
 
-## 2. Run Full Pipeline
+By default `setup.sh`:
+
+- installs `uv` if needed and runs `uv sync`
+- creates `.env` from `.env.example` on first run
+- installs and starts PostgreSQL on apt-based systems when `psql` is missing
+- initializes the local `spotiboys` schema from `db/001_init.sql`
+- installs `awscli` into `.venv` and syncs `data/` and `panns/` from Chameleon S3
+
+## Common Toggles
 
 ```bash
-uv run python main.py --limit 100
+SYNC_REMOTE_ASSETS=false bash setup.sh
+INSTALL_POSTGRES=false INIT_DB=false bash setup.sh
+RUN_INDEXES=true bash setup.sh
 ```
 
-This runs:
-1. `src/download_previews.py`
-2. `src/pipeline_stage1_catalog.py`
-3. `src/pipeline_stage2_training.py`
-
-## 3. Optional: Rebuild Universe First
-
-If you want to regenerate `universe_metadata.csv` and `filtered_sessions.csv` before stage 1/2:
+## Re-run DB Init Only
 
 ```bash
-uv run python main.py --with-universe --limit 100
+bash scripts/init_db.sh
 ```
 
-## 4. Audio Output Directory
+## Project Notes
 
-By default previews are written to `./data/raw/audio_previews`.
-
-You can override with an environment variable:
-
-```bash
-export AUDIO_PREVIEWS_DIR=/Volumes/T7/MLOps_music_track
-uv run python main.py --limit 100
-```
-
-## 5. 30Music Parsing Scripts
-
-`src/data_parse` is kept intact. If you need to parse raw 30Music idomaar files:
-
-```bash
-uv run python src/data_parse/parse_30music.py
-```
+- Item2Vec code lives under `src/item2vec/`
+- Retriever code lives under `src/retriever/`
+- Data preprocessing notes live in `data_preprocess_pipeline.md`
+- Item2Vec pipeline notes live in `item2vec_pipeline.md`
