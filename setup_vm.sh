@@ -31,6 +31,10 @@ export AWS_ACCESS_KEY_ID="11580ec852704238a35acfbd65c7146a"
 export AWS_SECRET_ACCESS_KEY="2759a133cae84a8e9a48c609c4dbc1b1"
 export PYTHONWARNINGS="ignore:Unverified HTTPS request"
 export MLFLOW_TRACKING_URI="http://localhost:8000"
+# 持久化到 ~/.bashrc，SSH 重连后自动生效
+if ! grep -q 'MLFLOW_TRACKING_URI' "${HOME}/.bashrc" 2>/dev/null; then
+    echo 'export MLFLOW_TRACKING_URI=http://localhost:8000' >> "${HOME}/.bashrc"
+fi
 
 # --------------------------------------------------------------------------- #
 # 工具函数
