@@ -90,6 +90,7 @@ bash scripts/run_ranker_seed_generator.sh --max-requests 25 --top-k 5
 
 The generator:
 
+- reads only a small seed pool from `ranker_val.parquet` by default for fast demos
 - samples realistic session contexts from `ranker_val.parquet`
 - builds hypothetical `/recommend`, `/impression`, and `/outcome` payloads
 - optionally POSTs them when `RECOMMEND_URL`, `IMPRESSION_URL`, and `OUTCOME_URL` are set

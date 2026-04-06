@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow.parquet as pq
 import requests
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -23,6 +24,17 @@ DEFAULT_PARQUET_CANDIDATES = (
 LABEL_DEC = {0: "positive", 1: "neutral", 2: "skip", 3: "pad"}
 Y_TO_LABEL = {1.0: "positive", 0.5: "neutral", 0.0: "skip"}
 PLAY_RATIO_BY_LABEL = {"positive": 1.0, "neutral": 0.5, "skip": 0.0}
+PARQUET_COLUMNS = [
+    "context_id",
+    "session_id",
+    "user_id",
+    "prefix_ids",
+    "prefix_labels",
+    "prefix_len",
+    "candidate_id",
+    "y",
+    "is_positive",
+]
 
 log = logging.getLogger("data_gen.ranker_seed")
 
@@ -48,6 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default=None)
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--max-requests", type=int, default=25)
+    parser.add_argument("--seed-pool-size", type=int, default=1000)
     parser.add_argument("--top-k", type=int, default=5)
     parser.add_argument("--sample-mode", choices=["random", "sequential"], default="random")
     parser.add_argument("--seed", type=int, default=42)
@@ -59,6 +72,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-version", default="generator-seed-demo")
     parser.add_argument("--trigger-type", default="generator_ranker_val_seed")
     parser.add_argument("--print-samples", type=int, default=3)
+    parser.add_argument(
+        "--full-scan",
+        action="store_true",
+        help="Read the entire ranker parquet instead of stopping after a small seed pool.",
+    )
     return parser.parse_args()
 
 
@@ -110,21 +128,7 @@ def decode_expected_label(y_value: float) -> str:
     return Y_TO_LABEL.get(rounded, "unknown")
 
 
-def load_seed_contexts(parquet_path: Path) -> list[SeedContext]:
-    df = pd.read_parquet(
-        parquet_path,
-        columns=[
-            "context_id",
-            "session_id",
-            "user_id",
-            "prefix_ids",
-            "prefix_labels",
-            "prefix_len",
-            "candidate_id",
-            "y",
-            "is_positive",
-        ],
-    )
+def contexts_from_df(df: pd.DataFrame, limit_contexts: int | None = None) -> list[SeedContext]:
     n_rows = len(df)
     if n_rows % 6 != 0:
         raise ValueError(f"Expected rows divisible by 6, got {n_rows}")
@@ -161,8 +165,46 @@ def load_seed_contexts(parquet_path: Path) -> list[SeedContext]:
                 expected_y=float(positive_row["y"]),
             )
         )
+        if limit_contexts is not None and len(contexts) >= limit_contexts:
+            break
 
     return contexts
+
+
+def estimate_total_contexts(parquet_path: Path) -> int:
+    parquet_file = pq.ParquetFile(parquet_path)
+    return parquet_file.metadata.num_rows // 6
+
+
+def load_seed_contexts(
+    parquet_path: Path,
+    target_contexts: int,
+    full_scan: bool,
+) -> tuple[list[SeedContext], int]:
+    if full_scan:
+        log.info("Full scan enabled; reading the entire ranker validation parquet.")
+        df = pd.read_parquet(parquet_path, columns=PARQUET_COLUMNS)
+        return contexts_from_df(df), estimate_total_contexts(parquet_path)
+
+    parquet_file = pq.ParquetFile(parquet_path)
+    total_contexts = parquet_file.metadata.num_rows // 6
+    contexts: list[SeedContext] = []
+
+    for row_group_index in range(parquet_file.num_row_groups):
+        table = parquet_file.read_row_group(row_group_index, columns=PARQUET_COLUMNS)
+        chunk_df = table.to_pandas()
+        remaining = max(0, target_contexts - len(contexts))
+        contexts.extend(contexts_from_df(chunk_df, limit_contexts=remaining))
+        log.info(
+            "Loaded row group %s/%s -> pooled %s seed contexts",
+            row_group_index + 1,
+            parquet_file.num_row_groups,
+            len(contexts),
+        )
+        if len(contexts) >= target_contexts:
+            break
+
+    return contexts, total_contexts
 
 
 def sample_contexts(
@@ -338,7 +380,14 @@ def main() -> None:
     )
 
     log.info("Loading ranker seed contexts from %s", parquet_path)
-    all_contexts = load_seed_contexts(parquet_path)
+    target_contexts = max(args.max_requests, args.seed_pool_size)
+    if args.sample_mode == "sequential" and not args.full_scan:
+        target_contexts = args.max_requests
+    all_contexts, total_contexts = load_seed_contexts(
+        parquet_path,
+        target_contexts=target_contexts,
+        full_scan=args.full_scan,
+    )
     selected_contexts = sample_contexts(
         all_contexts,
         max_requests=args.max_requests,
@@ -346,9 +395,10 @@ def main() -> None:
         seed=args.seed,
     )
     log.info(
-        "Prepared %s sampled contexts from %s total validation contexts",
+        "Prepared %s sampled contexts from %s pooled contexts (%s total available)",
         len(selected_contexts),
         len(all_contexts),
+        total_contexts,
     )
 
     session = requests.Session()
@@ -464,11 +514,14 @@ def main() -> None:
     summary = {
         "parquet_path": str(parquet_path),
         "output_dir": str(output_dir),
-        "n_available_contexts": len(all_contexts),
+        "n_available_contexts": total_contexts,
+        "n_pooled_contexts": len(all_contexts),
         "n_requests_emitted": len(selected_contexts),
+        "seed_pool_size": args.seed_pool_size,
         "sample_mode": args.sample_mode,
         "seed": args.seed,
         "top_k": args.top_k,
+        "full_scan": args.full_scan,
         "recommend_url": args.recommend_url,
         "impression_url": args.impression_url,
         "outcome_url": args.outcome_url,
