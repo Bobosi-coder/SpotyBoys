@@ -80,6 +80,21 @@ Published object-storage prefixes:
 - `datasets/ranker/{ranker_version}/`
 - `manifests/releases/...`
 
+## Generator Workflow
+
+Production-like request generation from `ranker_val.parquet`:
+
+```bash
+bash scripts/run_ranker_seed_generator.sh --max-requests 25 --top-k 5
+```
+
+The generator:
+
+- samples realistic session contexts from `ranker_val.parquet`
+- builds hypothetical `/recommend`, `/impression`, and `/outcome` payloads
+- optionally POSTs them when `RECOMMEND_URL`, `IMPRESSION_URL`, and `OUTCOME_URL` are set
+- always writes JSONL logs under `artifacts/generator/<run_name>/`
+
 ## Project Notes
 
 - Item2Vec code lives under `src/item2vec/`

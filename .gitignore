@@ -17,6 +17,7 @@ panns/
 *.mp3
 *.wav
 *.m4a
+/ranker_*.parquet
 
 # Logs
 logs/
