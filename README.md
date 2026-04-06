@@ -95,6 +95,23 @@ The generator:
 - optionally POSTs them when `RECOMMEND_URL`, `IMPRESSION_URL`, and `OUTCOME_URL` are set
 - always writes JSONL logs under `artifacts/generator/<run_name>/`
 
+Minimum endpoint-backed demo flow:
+
+```bash
+bash scripts/run_mock_recommendation_server.sh
+RECOMMEND_URL=http://localhost:8000/recommend \
+IMPRESSION_URL=http://localhost:8000/impression \
+OUTCOME_URL=http://localhost:8000/outcome \
+bash scripts/run_ranker_seed_generator.sh --max-requests 25 --top-k 5
+```
+
+The mock service:
+
+- exposes `POST /recommend`, `POST /impression`, and `POST /outcome`
+- uses retriever/ranker artifacts when available for a minimal online feature path
+- falls back to seed candidates when local model artifacts are missing
+- writes endpoint-side JSONL logs under `artifacts/mock_service/`
+
 ## Project Notes
 
 - Item2Vec code lives under `src/item2vec/`
