@@ -6,6 +6,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${PROJECT_ROOT}"
 
+# Preserve explicit environment overrides before loading project defaults.
+EXPLICIT_DATASET_VERSION="${DATASET_VERSION-__UNSET__}"
+EXPLICIT_MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI-__UNSET__}"
+EXPLICIT_RAW_SOURCE_URI="${RAW_SOURCE_URI-__UNSET__}"
+EXPLICIT_AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID-__UNSET__}"
+EXPLICIT_AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY-__UNSET__}"
+EXPLICIT_AWS_SESSION_TOKEN="${AWS_SESSION_TOKEN-__UNSET__}"
+EXPLICIT_S3_ENDPOINT="${S3_ENDPOINT-__UNSET__}"
+EXPLICIT_ARTIFACT_BUCKET="${ARTIFACT_BUCKET-__UNSET__}"
+EXPLICIT_ARTIFACT_STORAGE_BUCKET="${ARTIFACT_STORAGE_BUCKET-__UNSET__}"
+EXPLICIT_DATA_RELEASE_BUCKET="${DATA_RELEASE_BUCKET-__UNSET__}"
+
 if [ -f "${PROJECT_ROOT}/.env" ]; then
   set -a
   # shellcheck disable=SC1091
@@ -13,9 +25,29 @@ if [ -f "${PROJECT_ROOT}/.env" ]; then
   set +a
 fi
 
+if [ "${EXPLICIT_DATASET_VERSION}" != "__UNSET__" ]; then export "DATASET_VERSION=${EXPLICIT_DATASET_VERSION}"; fi
+if [ "${EXPLICIT_MLFLOW_TRACKING_URI}" != "__UNSET__" ]; then export "MLFLOW_TRACKING_URI=${EXPLICIT_MLFLOW_TRACKING_URI}"; fi
+if [ "${EXPLICIT_RAW_SOURCE_URI}" != "__UNSET__" ]; then export "RAW_SOURCE_URI=${EXPLICIT_RAW_SOURCE_URI}"; fi
+if [ "${EXPLICIT_AWS_ACCESS_KEY_ID}" != "__UNSET__" ]; then export "AWS_ACCESS_KEY_ID=${EXPLICIT_AWS_ACCESS_KEY_ID}"; fi
+if [ "${EXPLICIT_AWS_SECRET_ACCESS_KEY}" != "__UNSET__" ]; then export "AWS_SECRET_ACCESS_KEY=${EXPLICIT_AWS_SECRET_ACCESS_KEY}"; fi
+if [ "${EXPLICIT_AWS_SESSION_TOKEN}" != "__UNSET__" ]; then export "AWS_SESSION_TOKEN=${EXPLICIT_AWS_SESSION_TOKEN}"; fi
+if [ "${EXPLICIT_S3_ENDPOINT}" != "__UNSET__" ]; then export "S3_ENDPOINT=${EXPLICIT_S3_ENDPOINT}"; fi
+if [ "${EXPLICIT_ARTIFACT_BUCKET}" != "__UNSET__" ]; then export "ARTIFACT_BUCKET=${EXPLICIT_ARTIFACT_BUCKET}"; fi
+if [ "${EXPLICIT_ARTIFACT_STORAGE_BUCKET}" != "__UNSET__" ]; then export "ARTIFACT_STORAGE_BUCKET=${EXPLICIT_ARTIFACT_STORAGE_BUCKET}"; fi
+if [ "${EXPLICIT_DATA_RELEASE_BUCKET}" != "__UNSET__" ]; then export "DATA_RELEASE_BUCKET=${EXPLICIT_DATA_RELEASE_BUCKET}"; fi
+
+if ! command -v uv >/dev/null 2>&1 && [ -x "${HOME}/.local/bin/uv" ]; then
+  export PATH="${HOME}/.local/bin:${PATH}"
+fi
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "[item2vec-release] ERROR: uv not found on PATH." >&2
+  echo "[item2vec-release] Try: export PATH=\"\$HOME/.local/bin:\$PATH\"" >&2
+  exit 1
+fi
+
 echo "[item2vec-release] project root: ${PROJECT_ROOT}"
 echo "[item2vec-release] raw source: ${RAW_SOURCE_URI:-s3://proj23-mlflow-artifacts/data/raw/content/30music_parsed/}"
 echo "[item2vec-release] dataset version: ${DATASET_VERSION:-auto}"
 
 uv run python -m src.data_release.publish_item2vec_release "$@"
-
