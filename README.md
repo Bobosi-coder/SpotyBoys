@@ -99,7 +99,7 @@ The generator:
 Minimum endpoint-backed demo flow:
 
 ```bash
-bash scripts/run_mock_recommendation_server.sh --port 8001
+bash scripts/run_mock_recommendation_server.sh
 RECOMMEND_URL=http://localhost:8001/recommend \
 IMPRESSION_URL=http://localhost:8001/impression \
 OUTCOME_URL=http://localhost:8001/outcome \
@@ -109,8 +109,8 @@ bash scripts/run_ranker_seed_generator.sh --max-requests 25 --top-k 5
 The mock service:
 
 - exposes `POST /recommend`, `POST /impression`, and `POST /outcome`
-- uses retriever/ranker artifacts when available for a minimal online feature path
-- falls back to seed candidates when local model artifacts are missing
+- defaults to a lightweight seed-only mode so it stays up reliably on small VMs
+- can optionally enable retriever/ranker loading via `MOCK_ENABLE_RETRIEVER=true` and `MOCK_ENABLE_RANKER=true`
 - writes endpoint-side JSONL logs under `artifacts/mock_service/`
 
 ## Project Notes

@@ -27,6 +27,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--default-top-k", type=int, default=5)
+    parser.add_argument("--enable-retriever", action="store_true")
+    parser.add_argument("--enable-ranker", action="store_true")
     parser.add_argument("--disable-retriever", action="store_true")
     parser.add_argument("--disable-ranker", action="store_true")
     return parser.parse_args()
@@ -53,8 +55,8 @@ class RecommendationService:
         self,
         output_dir: Path,
         default_top_k: int,
-        disable_retriever: bool,
-        disable_ranker: bool,
+        use_retriever: bool,
+        use_ranker: bool,
     ) -> None:
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -66,20 +68,24 @@ class RecommendationService:
         self.outcome_path = self.output_dir / "outcome_logs.jsonl"
 
         retriever = None
-        if not disable_retriever:
+        if use_retriever:
             try:
                 retriever = MultiRecallRetriever()
                 log.info("Retriever loaded for /recommend.")
             except Exception as exc:
                 log.warning("Retriever unavailable; falling back to seed candidates only: %s", exc)
+        else:
+            log.info("Retriever disabled; /recommend will use seed candidates only.")
 
         ranker = None
-        if not disable_ranker:
+        if use_ranker:
             try:
                 ranker = GRURankerInference()
                 log.info("Ranker loaded for /recommend.")
             except Exception as exc:
                 log.warning("Ranker unavailable; returning candidate order without reranking: %s", exc)
+        else:
+            log.info("Ranker disabled; /recommend will not rerank candidates.")
 
         self.artifacts = ServiceArtifacts(retriever=retriever, ranker=ranker)
 
@@ -132,6 +138,8 @@ class RecommendationService:
                 "num_seed_candidates": len(seed_candidate_ids),
                 "candidate_source": candidate_source,
                 "ranker_used": ranker_used,
+                "retriever_enabled": self.artifacts.retriever is not None,
+                "ranker_enabled": self.artifacts.ranker is not None,
             },
             "created_at": iso_now(),
         }
@@ -205,11 +213,14 @@ def main() -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
+    use_retriever = args.enable_retriever and not args.disable_retriever
+    use_ranker = args.enable_ranker and not args.disable_ranker
+
     service = RecommendationService(
         output_dir=Path(args.output_dir),
         default_top_k=args.default_top_k,
-        disable_retriever=args.disable_retriever,
-        disable_ranker=args.disable_ranker,
+        use_retriever=use_retriever,
+        use_ranker=use_ranker,
     )
     httpd = ThreadingHTTPServer((args.host, args.port), RequestHandler)
     httpd.app = service  # type: ignore[attr-defined]
