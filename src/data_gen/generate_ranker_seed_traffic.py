@@ -189,12 +189,24 @@ def load_seed_contexts(
     parquet_file = pq.ParquetFile(parquet_path)
     total_contexts = parquet_file.metadata.num_rows // 6
     contexts: list[SeedContext] = []
+    remainder_df = pd.DataFrame(columns=PARQUET_COLUMNS)
 
     for row_group_index in range(parquet_file.num_row_groups):
         table = parquet_file.read_row_group(row_group_index, columns=PARQUET_COLUMNS)
         chunk_df = table.to_pandas()
+        if not remainder_df.empty:
+            chunk_df = pd.concat([remainder_df, chunk_df], ignore_index=True)
+
+        complete_rows = (len(chunk_df) // 6) * 6
+        if complete_rows == 0:
+            remainder_df = chunk_df
+            continue
+
+        process_df = chunk_df.iloc[:complete_rows].reset_index(drop=True)
+        remainder_df = chunk_df.iloc[complete_rows:].reset_index(drop=True)
+
         remaining = max(0, target_contexts - len(contexts))
-        contexts.extend(contexts_from_df(chunk_df, limit_contexts=remaining))
+        contexts.extend(contexts_from_df(process_df, limit_contexts=remaining))
         log.info(
             "Loaded row group %s/%s -> pooled %s seed contexts",
             row_group_index + 1,
@@ -203,6 +215,12 @@ def load_seed_contexts(
         )
         if len(contexts) >= target_contexts:
             break
+
+    if len(contexts) < target_contexts and not remainder_df.empty:
+        log.info(
+            "Ignoring %s trailing rows without a full 6-row context at parquet end",
+            len(remainder_df),
+        )
 
     return contexts, total_contexts
 
