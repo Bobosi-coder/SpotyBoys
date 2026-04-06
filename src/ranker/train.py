@@ -161,7 +161,7 @@ def train(args: argparse.Namespace) -> None:
     log.info(f"Train: {len(train_ds):,} contexts  Val: {len(val_ds):,} contexts")
 
     # ── Model ─────────────────────────────────────────────────────────────
-    model = GRURanker(d_emb=D_EMB, n_layers=2, dropout=0.1).to(device)
+    model = GRURanker(d_emb=D_EMB, n_layers=args.n_layers, dropout=args.dropout).to(device)
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     log.info(f"GRURanker: {n_params:,} trainable parameters")
 
@@ -189,16 +189,17 @@ def train(args: argparse.Namespace) -> None:
             "device":        str(device),
             "d_emb":         D_EMB,
             "n_labels":      N_LABELS,
-            "n_layers":      2,
-            "dropout":       0.1,
+            "n_layers":      args.n_layers,
+            "dropout":       args.dropout,
             "L":             L_PREFIX,
             "train_contexts": len(train_ds),
             "val_contexts":   len(val_ds),
         })
 
-        best_ndcg = -1.0
+        best_ndcg  = -1.0
         ckpt_path  = os.path.join(OUT_DIR, "gru_ranker.pt")
         cfg_path   = os.path.join(OUT_DIR, "gru_ranker_config.json")
+        t_train_start = time.time()
 
         for epoch in range(1, args.epochs + 1):
             t_ep = time.time()
@@ -240,12 +241,20 @@ def train(args: argparse.Namespace) -> None:
                 f"({elapsed:.0f}s)"
             )
 
+            # Peak VRAM for this epoch
+            peak_vram_mb = 0.0
+            if device.type == "cuda":
+                peak_vram_mb = torch.cuda.max_memory_allocated(device) / 1e6
+                torch.cuda.reset_peak_memory_stats(device)
+
             mlflow.log_metrics({
-                "train_loss": train_loss,
-                "val_loss":   val_m["val_loss"],
-                "HR5":        val_m["HR@5"],
-                "NDCG5":      val_m["NDCG@5"],
-                "MRR5":       val_m["MRR@5"],
+                "train_loss":   train_loss,
+                "val_loss":     val_m["val_loss"],
+                "HR5":          val_m["HR@5"],
+                "NDCG5":        val_m["NDCG@5"],
+                "MRR5":         val_m["MRR@5"],
+                "epoch_wall_s": elapsed,
+                "peak_vram_mb": peak_vram_mb,
             }, step=epoch)
 
             # Checkpoint on NDCG@5 improvement
@@ -255,8 +264,8 @@ def train(args: argparse.Namespace) -> None:
                 config = {
                     "d_emb":    D_EMB,
                     "n_labels": N_LABELS,
-                    "n_layers": 2,
-                    "dropout":  0.1,
+                    "n_layers": args.n_layers,
+                    "dropout":  args.dropout,
                     "L":        L_PREFIX,
                 }
                 with open(cfg_path, "w") as f:
@@ -264,11 +273,13 @@ def train(args: argparse.Namespace) -> None:
                 log.info(f"  ✓ Best NDCG@5={best_ndcg:.4f} — checkpoint saved")
 
         # Log final artifacts
+        total_wall_s = time.time() - t_train_start
+        mlflow.log_metric("total_wall_s", total_wall_s)
         if os.path.exists(ckpt_path):
             mlflow.log_artifact(ckpt_path)
             mlflow.log_artifact(cfg_path)
 
-    log.info(f"Training complete. Best NDCG@5={best_ndcg:.4f}")
+    log.info(f"Training complete. Best NDCG@5={best_ndcg:.4f}  total={total_wall_s/60:.1f}min")
 
 
 if __name__ == "__main__":
@@ -284,6 +295,8 @@ if __name__ == "__main__":
     parser.add_argument("--weight-decay",      type=float, default=1e-4)
     parser.add_argument("--max-norm",          type=float, default=1.0)
     parser.add_argument("--device",            type=str,   default="auto")
+    parser.add_argument("--n-layers",          type=int,   default=2)
+    parser.add_argument("--dropout",           type=float, default=0.1)
     parser.add_argument("--mlflow-experiment", type=str,   default="gru-ranker-training")
     parser.add_argument("--run-name",          type=str,   default="gru-ranker")
     args = parser.parse_args()
