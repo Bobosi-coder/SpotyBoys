@@ -98,10 +98,10 @@ The generator:
 Minimum endpoint-backed demo flow:
 
 ```bash
-bash scripts/run_mock_recommendation_server.sh
-RECOMMEND_URL=http://localhost:8000/recommend \
-IMPRESSION_URL=http://localhost:8000/impression \
-OUTCOME_URL=http://localhost:8000/outcome \
+bash scripts/run_mock_recommendation_server.sh --port 8001
+RECOMMEND_URL=http://localhost:8001/recommend \
+IMPRESSION_URL=http://localhost:8001/impression \
+OUTCOME_URL=http://localhost:8001/outcome \
 bash scripts/run_ranker_seed_generator.sh --max-requests 25 --top-k 5
 ```
 
