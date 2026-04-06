@@ -8,8 +8,7 @@
 
 set -euo pipefail
 
-export MLFLOW_TRACKING_URI="${MLFLOW_TRACKING_URI:-http://localhost:8000}"
-EXPERIMENT="gru-ranker-sweep"
+EXPERIMENT="gru-ranker-sweep-for-first-implementation"
 LOG_DIR="logs"
 mkdir -p "${LOG_DIR}"
 
