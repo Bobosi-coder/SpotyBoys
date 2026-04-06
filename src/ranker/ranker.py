@@ -11,15 +11,16 @@ Usage:
 """
 import json
 import logging
-import math
 import os
 import pickle
+from pathlib import Path
 
 import numpy as np
 import torch
 
 from src.ranker.model import GRURanker
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 OUT_DIR      = "artifacts/ranker"
 I2V_DIR      = "artifacts/item2vec"
 RETRIEVER_DIR = "artifacts/retriever"
@@ -28,6 +29,23 @@ L_PREFIX  = 20
 LABEL_ENC = {"positive": 0, "neutral": 1, "skip": 2}   # unknown → 3
 
 log = logging.getLogger("ranker.inference")
+
+
+def _resolve_artifact_path(primary_dir: str, filename: str) -> str:
+    """
+    Resolve ranker inference artifacts from either:
+    1. the provided artifacts_dir (expected layout), or
+    2. the project root (used by some demo/checkpoint drops).
+    """
+    candidates = [
+        Path(primary_dir) / filename,
+        PROJECT_ROOT / filename,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    searched = "\n".join(f"- {path}" for path in candidates)
+    raise FileNotFoundError(f"Missing required ranker artifact {filename}. Looked in:\n{searched}")
 
 
 class GRURankerInference:
@@ -57,8 +75,8 @@ class GRURankerInference:
         log.info("Loading GRURankerInference artifacts...")
 
         # Model config + weights
-        cfg_path  = os.path.join(artifacts_dir, "gru_ranker_config.json")
-        ckpt_path = os.path.join(artifacts_dir, "gru_ranker.pt")
+        cfg_path = _resolve_artifact_path(artifacts_dir, "gru_ranker_config.json")
+        ckpt_path = _resolve_artifact_path(artifacts_dir, "gru_ranker.pt")
         with open(cfg_path) as f:
             cfg = json.load(f)
         self.model = GRURanker(

@@ -13,13 +13,25 @@ from .versioning import ReleaseLocation, build_s3_uri, join_s3_key, resolve_vers
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RELEASE_DIR = PROJECT_ROOT / "artifacts" / "releases" / "ranker"
 
-RELEASE_FILES = [
-    "artifacts/ranker/neg_sample_weights.npy",
-    "artifacts/ranker/ranker_train.parquet",
-    "artifacts/ranker/ranker_val.parquet",
-    "artifacts/ranker/gru_ranker.pt",
-    "artifacts/ranker/gru_ranker_config.json",
-]
+RELEASE_FILES = {
+    "neg_sample_weights.npy": [
+        "artifacts/ranker/neg_sample_weights.npy",
+    ],
+    "ranker_train.parquet": [
+        "artifacts/ranker/ranker_train.parquet",
+    ],
+    "ranker_val.parquet": [
+        "artifacts/ranker/ranker_val.parquet",
+    ],
+    "gru_ranker.pt": [
+        "artifacts/ranker/gru_ranker.pt",
+        "gru_ranker.pt",
+    ],
+    "gru_ranker_config.json": [
+        "artifacts/ranker/gru_ranker_config.json",
+        "gru_ranker_config.json",
+    ],
+}
 
 PROCESSED_DEPENDENCIES = [
     "item2vec_128d.npy",
@@ -122,15 +134,20 @@ def run_pipeline(args: argparse.Namespace) -> dict[str, Any]:
     return metrics
 
 
-def ensure_release_files() -> list[Path]:
+def ensure_release_files() -> list[tuple[str, Path]]:
     missing: list[str] = []
-    paths: list[Path] = []
-    for relative_path in RELEASE_FILES:
-        full_path = PROJECT_ROOT / relative_path
-        if full_path.exists():
-            paths.append(full_path)
+    paths: list[tuple[str, Path]] = []
+    for logical_name, candidate_paths in RELEASE_FILES.items():
+        resolved: Path | None = None
+        for relative_path in candidate_paths:
+            full_path = PROJECT_ROOT / relative_path
+            if full_path.exists():
+                resolved = full_path
+                break
+        if resolved is not None:
+            paths.append((logical_name, resolved))
         else:
-            missing.append(relative_path)
+            missing.append(f"{logical_name} (looked in: {', '.join(candidate_paths)})")
     if missing:
         raise FileNotFoundError(
             "Missing ranker release files:\n" + "\n".join(f"- {path}" for path in missing)
@@ -215,8 +232,8 @@ def main() -> None:
     local_paths = ensure_release_files()
     store = S3ObjectStore(bucket=args.bucket)
     uploaded_outputs: list[dict[str, Any]] = []
-    for path in local_paths:
-        relative_name = path.relative_to(PROJECT_ROOT / "artifacts" / "ranker").as_posix()
+    for logical_name, path in local_paths:
+        relative_name = logical_name
         key = join_s3_key(release.versioned_prefix, relative_name)
         s3_uri = store.upload_file(path, key)
         uploaded_outputs.append(

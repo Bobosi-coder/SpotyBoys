@@ -18,6 +18,8 @@ panns/
 *.wav
 *.m4a
 /ranker_*.parquet
+/gru_ranker.pt
+/gru_ranker_config.json
 
 # Logs
 logs/
