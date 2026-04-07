@@ -130,6 +130,17 @@ The online feature demo:
 - writes `request.json`, `response.json`, `feature_summary.json`, and `demo_summary.json` under `artifacts/online_feature_demo/<run_name>/`
 - surfaces a compact `online_features` summary for a single end-to-end inference example
 
+## Presentation Docs
+
+Recommended docs for the current presentation scope:
+
+- `doc/data_team_initial_implement_plan.md`
+- `doc/data_team_presentation_runbook.md`
+- `doc/generator_demo_script_draft.md`
+- `doc/online_feature_pipeline_report_draft.md`
+
+Current presentation scope intentionally excludes the production-log-based batch dataset compiler.
+
 ## Project Notes
 
 - Item2Vec code lives under `src/item2vec/`
