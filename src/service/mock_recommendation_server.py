@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from src.features.online_features import build_online_feature_summary
 from src.ranker.ranker import GRURankerInference
 from src.retriever.retriever import MultiRecallRetriever
 
@@ -132,15 +133,17 @@ class RecommendationService:
             "candidate_scores": [round(float(score), 6) for _, score in ranked_candidates],
             "top5_ids": [track_id for track_id, _ in top_ranked],
             "top5_scores": [round(float(score), 6) for _, score in top_ranked],
-            "online_features": {
-                "prefix_len": len(session_track_ids),
-                "recent_session_tracks": session_track_ids[-5:],
-                "num_seed_candidates": len(seed_candidate_ids),
-                "candidate_source": candidate_source,
-                "ranker_used": ranker_used,
-                "retriever_enabled": self.artifacts.retriever is not None,
-                "ranker_enabled": self.artifacts.ranker is not None,
-            },
+            "online_features": build_online_feature_summary(
+                user_id=user_id,
+                session_track_ids=session_track_ids,
+                session_labels=session_labels,
+                seed_candidate_ids=seed_candidate_ids,
+                candidate_pool_ids=[track_id for track_id, _ in ranked_candidates],
+                candidate_source=candidate_source,
+                retriever_enabled=self.artifacts.retriever is not None,
+                ranker_enabled=self.artifacts.ranker is not None,
+                ranker_used=ranker_used,
+            ),
             "created_at": iso_now(),
         }
 

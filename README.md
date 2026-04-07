@@ -113,6 +113,23 @@ The mock service:
 - can optionally enable retriever/ranker loading via `MOCK_ENABLE_RETRIEVER=true` and `MOCK_ENABLE_RANKER=true`
 - writes endpoint-side JSONL logs under `artifacts/mock_service/`
 
+## Online Feature Demo
+
+Separate minimal artifact for the online-feature requirement:
+
+```bash
+bash scripts/run_mock_recommendation_server.sh
+bash scripts/run_online_feature_demo.sh
+```
+
+The online feature demo:
+
+- reuses a realistic request from the latest `artifacts/generator/*/recommend_requests.jsonl` when available
+- falls back to a built-in sample request if no generator log exists
+- calls `POST /recommend`
+- writes `request.json`, `response.json`, `feature_summary.json`, and `demo_summary.json` under `artifacts/online_feature_demo/<run_name>/`
+- surfaces a compact `online_features` summary for a single end-to-end inference example
+
 ## Project Notes
 
 - Item2Vec code lives under `src/item2vec/`
