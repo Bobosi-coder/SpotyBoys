@@ -1,0 +1,9 @@
+FROM rayproject/ray:2.9.0-py310-cpu
+WORKDIR /app
+USER root
+RUN pip install --no-cache-dir torch numpy scipy fastapi uvicorn pydantic requests
+USER ray
+COPY src/ /app/src/
+ENV PYTHONPATH=/app/src
+EXPOSE 8000
+CMD ["serve", "run", "ray_serve_api:gru_ranker_app", "--host", "0.0.0.0", "--port", "8000"]

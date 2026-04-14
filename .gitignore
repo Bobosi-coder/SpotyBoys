@@ -1,32 +1,28 @@
 *.tar.gz
-/data/
-
-# Environments
-venv/
-.env
-
-# Cache
 __pycache__/
-*.pyc
-.ipynb_checkpoints/
+*.py[cod]
+.venv/
+songs embedding/.venv/
+artifacts/audio_cache/
+artifacts/**/*.csv
+artifacts/**/*.npy
+artifacts/**/*.pth
+artifacts/**/*.pt
+artifacts/**/*.mp3
+!artifacts/.gitkeep
+!artifacts/**/.gitkeep
+!artifacts/README.md
+data/audio_samples/*
+!data/audio_samples/.gitkeep
+data/raw/30music/*
+!data/raw/30music/.gitkeep
 
-# Data and Models
-models/
-artifacts/
-panns/
-*.mp3
-*.wav
-*.m4a
-/ranker_*.parquet
-/gru_ranker.pt
-/gru_ranker_config.json
-
-# Logs
-logs/
-
-# OS Files
+# Large files and directories
+/models/
+/data/
+/venv/
 .DS_Store
-
-
-mlruns/
-mlflow.db
+/audio_cache/
+/docs/
+*.tar
+*.pth
