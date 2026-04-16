@@ -1,0 +1,13 @@
+services:
+  downloader:
+    build: .
+    volumes:
+      - /mnt/mlflow_persist_large/music:/output
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - S3_ENDPOINT=${S3_ENDPOINT:-https://chi.tacc.chameleoncloud.org:7480}
+      - S3_BUCKET=${S3_BUCKET:-proj23-mlflow-artifacts}
+      - TARGET=${TARGET:-130000}
+      - WORKERS=${WORKERS:-5}
+    restart: "no"
