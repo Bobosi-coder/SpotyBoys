@@ -69,8 +69,8 @@ def s3_download_csv(key: str) -> pd.DataFrame:
 # ── Build ordered track list ──────────────────────────────────────────────────
 
 def build_track_list() -> list[dict]:
-    catalog   = s3_download_csv("artifacts/item2vec/item2vec_catalog.csv")
-    pop       = s3_download_csv("artifacts/retriever/popularity/pop_scores.csv")
+    catalog   = s3_download_csv("downloader/item2vec_catalog.csv")
+    pop       = s3_download_csv("downloader/pop_scores.csv")
 
     # catalog: track_id, artist_hint, title
     # pop:     track_id, pop_score  (or log_pop_score — use whatever column exists)
