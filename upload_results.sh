@@ -1,82 +1,112 @@
 #!/usr/bin/env bash
 # =============================================================================
-# upload_results.sh — 训练完成后将结果上传至 S3
+# upload_results.sh — 训练完成后将 artifacts 上传至 S3
 #
-# 上传内容:
-#   artifacts/ranker/gru_ranker.pt          模型 checkpoint
-#   artifacts/ranker/gru_ranker_config.json 模型配置
-#   mlruns/<new_run>/                        本次训练的 MLflow run 元数据
-#   mlflow.db                                更新后的 MLflow 数据库
+# 在 MLflow 中确认最优 run 后手动执行，将 ranker 模型 + retriever artifacts
+# 写入 Real_service/{VERSION}/ 并生成 manifest.json。
 #
-# 使用方法:
-#   export AWS_ACCESS_KEY_ID=<your_key>
-#   export AWS_SECRET_ACCESS_KEY=<your_secret>
-#   bash upload_results.sh
+# Usage:
+#   bash upload_results.sh --version 20260417_143022 \
+#                          --retrieve-version 20260417_051148
+#
+# 如果 retrain.sh 刚运行过，VERSION 保存在 VERSION.txt:
+#   VERSION=$(cat VERSION.txt)
+#   bash upload_results.sh --version $VERSION --retrieve-version $VERSION
+#
+# 环境变量:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
+#   AWS_ENDPOINT_URL  (默认 https://chi.tacc.chameleoncloud.org:7480)
 # =============================================================================
 
 set -euo pipefail
 
-S3_BUCKET="proj23-mlflow-artifacts"
-S3_ENDPOINT="https://chi.tacc.chameleoncloud.org:7480"
-export PYTHONWARNINGS="ignore:Unverified HTTPS request"
+BUCKET="proj23-mlflow-artifacts"
+ENDPOINT="${AWS_ENDPOINT_URL:-https://chi.tacc.chameleoncloud.org:7480}"
+EP="--endpoint-url ${ENDPOINT} --no-verify-ssl --no-progress"
 
-log() { echo "[$(date '+%H:%M:%S')] $*"; }
+log()  { echo "[$(date '+%H:%M:%S')] $*"; }
+die()  { echo "ERROR: $*" >&2; exit 1; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
-AWS_BIN="${SCRIPT_DIR}/.venv/bin/aws"
-
-[[ -f "${AWS_BIN}" ]] || { echo "ERROR: awscli 未找到，请先运行 setup_vm.sh"; exit 1; }
-
-if [[ -z "${AWS_ACCESS_KEY_ID:-}" || -z "${AWS_SECRET_ACCESS_KEY:-}" ]]; then
-    echo "ERROR: AWS 凭据未设置"
-    exit 1
-fi
-
-EP=(--endpoint-url "${S3_ENDPOINT}" --no-verify-ssl --no-progress)
 
 # --------------------------------------------------------------------------- #
-# 上传模型 checkpoint
+# 解析参数
 # --------------------------------------------------------------------------- #
-log "=== 上传模型 checkpoint ==="
-if [[ -f artifacts/ranker/gru_ranker.pt ]]; then
-    "${AWS_BIN}" s3 cp artifacts/ranker/gru_ranker.pt \
-        "s3://${S3_BUCKET}/artifacts/ranker/gru_ranker.pt" "${EP[@]}"
-    "${AWS_BIN}" s3 cp artifacts/ranker/gru_ranker_config.json \
-        "s3://${S3_BUCKET}/artifacts/ranker/gru_ranker_config.json" "${EP[@]}"
-    log "OK: gru_ranker.pt + gru_ranker_config.json 上传完成"
-else
-    log "WARNING: artifacts/ranker/gru_ranker.pt 未找到，训练可能未完成"
-fi
+VERSION=""
+RETRIEVE_VERSION=""
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --version)          VERSION="$2";          shift 2 ;;
+        --retrieve-version) RETRIEVE_VERSION="$2"; shift 2 ;;
+        *) die "Unknown argument: $1" ;;
+    esac
+done
+
+[[ -n "${VERSION}" ]]          || die "Must specify --version VERSION"
+[[ -n "${RETRIEVE_VERSION}" ]] || die "Must specify --retrieve-version VERSION"
+
+[[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]] \
+    || die "AWS credentials not set"
+
+DST="s3://${BUCKET}/Real_service/${VERSION}"
+
+log "========================================================"
+log "Uploading to Real_service/${VERSION}/"
+log "Using retriever: Retrieve/${RETRIEVE_VERSION}/"
+log "========================================================"
 
 # --------------------------------------------------------------------------- #
-# 上传 MLflow 数据库 (含本次训练 run 的 metrics/params)
+# Ranker model
 # --------------------------------------------------------------------------- #
-log "=== 上传 MLflow 数据库 ==="
-if [[ -f mlflow.db ]]; then
-    "${AWS_BIN}" s3 cp mlflow.db \
-        "s3://${S3_BUCKET}/mlflow.db" "${EP[@]}"
-    log "OK: mlflow.db 上传完成"
-fi
+log "--- Ranker model ---"
+[[ -f "artifacts/ranker/gru_ranker.pt" ]] \
+    || die "artifacts/ranker/gru_ranker.pt not found — did training complete?"
+
+aws ${EP} s3 cp artifacts/ranker/gru_ranker.pt          "${DST}/gru_ranker.pt"
+aws ${EP} s3 cp artifacts/ranker/gru_ranker_config.json "${DST}/gru_ranker_config.json"
+log "OK: gru_ranker.pt + gru_ranker_config.json"
 
 # --------------------------------------------------------------------------- #
-# 上传 MLflow run 元数据 (只同步 metadata 文件，排除大 artifact)
+# Retriever artifacts (from Retrieve/{RETRIEVE_VERSION}/ → Real_service/{VERSION}/)
 # --------------------------------------------------------------------------- #
-log "=== 同步 MLflow run 元数据 ==="
-"${AWS_BIN}" s3 sync mlruns/ "s3://${S3_BUCKET}/mlruns/" \
-    --exclude "*.npy" \
-    --exclude "*.bin" \
-    --exclude "*.npz" \
-    --exclude "*.pkl" \
-    --exclude "*.csv" \
-    --exclude "*.parquet" \
-    "${EP[@]}"
-log "OK: MLflow 元数据同步完成"
+log "--- Retriever artifacts (copy from Retrieve/${RETRIEVE_VERSION}/) ---"
+
+for key in cooc_session.npz cooc_playlist.npz user_centroids.pkl pop_scores.csv; do
+    aws ${EP} s3 cp \
+        "s3://${BUCKET}/Retrieve/${RETRIEVE_VERSION}/${key}" \
+        "${DST}/${key}"
+    log "OK: ${key}"
+done
+
+# --------------------------------------------------------------------------- #
+# manifest.json
+# --------------------------------------------------------------------------- #
+log "--- Writing manifest.json ---"
+
+GIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
+
+cat <<EOF | aws ${EP} s3 cp - "${DST}/manifest.json"
+{
+  "version": "${VERSION}",
+  "retrieve_version": "${RETRIEVE_VERSION}",
+  "git_sha": "${GIT_SHA}",
+  "files": [
+    "gru_ranker.pt",
+    "gru_ranker_config.json",
+    "cooc_session.npz",
+    "cooc_playlist.npz",
+    "user_centroids.pkl",
+    "pop_scores.csv"
+  ]
+}
+EOF
+log "OK: manifest.json"
 
 echo ""
 log "========================================================"
-log "上传完成！S3 结果路径:"
-log "  模型: s3://${S3_BUCKET}/artifacts/ranker/gru_ranker.pt"
-log "  配置: s3://${S3_BUCKET}/artifacts/ranker/gru_ranker_config.json"
-log "  MLflow: s3://${S3_BUCKET}/mlflow.db"
+log "Upload complete!"
+log "  Real_service path: s3://${BUCKET}/Real_service/${VERSION}/"
+log "  Verify:  aws --endpoint-url ${ENDPOINT} --no-verify-ssl s3 ls s3://${BUCKET}/Real_service/${VERSION}/"
 log "========================================================"

@@ -8,6 +8,8 @@
 
 set -euo pipefail
 
+# MLflow tracking URI is read from MLFLOW_TRACKING_URI env var
+# (set in docker-compose.yml or exported manually before running)
 EXPERIMENT="gru-ranker-sweep-for-first-implementation"
 LOG_DIR="logs"
 mkdir -p "${LOG_DIR}"
