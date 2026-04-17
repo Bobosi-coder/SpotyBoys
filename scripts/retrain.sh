@@ -1,19 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
-# scripts/retrain.sh — 完整 retraining 编排脚本
+# scripts/retrain.sh — Full retraining orchestration
 #
-# Usage:
-#   # 只重新训练 ranker（复用已有 retriever artifacts）:
-#   bash scripts/retrain.sh --no-delta --retrieve-version 20260417_051148
+# Phase 1 (initial training on 30Music data, Ray Tune sweep):
+#   bash scripts/retrain.sh --phase1 --retrieve-version 20260417_051148
 #
-#   # 完整 retrain：合并新 session 数据 + retriever + ranker:
-#   bash scripts/retrain.sh --with-delta
+# Phase 2 (retrain after online delta arrives, fixed hyperparams):
+#   bash scripts/retrain.sh --phase2
 #
-#   # 自定义实验名（可选）:
-#   bash scripts/retrain.sh --no-delta --retrieve-version 20260417_051148 \
-#       --experiment gru-ranker-retrain
-#
-# 环境变量 (docker-compose.yml 设置):
+# Environment variables (set in docker-compose.yml):
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ENDPOINT_URL
 #   MLFLOW_TRACKING_URI=http://129.114.25.207:8000/
 # =============================================================================
@@ -32,27 +27,29 @@ ROOT_DIR="$(dirname "${SCRIPT_DIR}")"
 cd "${ROOT_DIR}"
 
 # --------------------------------------------------------------------------- #
-# 解析参数
+# Parse arguments
 # --------------------------------------------------------------------------- #
 MODE=""
 RETRIEVE_VERSION=""
+EXPERIMENT=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --no-delta)    MODE="no-delta";    shift ;;
-        --with-delta)  MODE="with-delta";  shift ;;
+        --phase1)          MODE="phase1"; shift ;;
+        --phase2)          MODE="phase2"; shift ;;
         --retrieve-version) RETRIEVE_VERSION="$2"; shift 2 ;;
+        --experiment)       EXPERIMENT="$2";        shift 2 ;;
         *) die "Unknown argument: $1" ;;
     esac
 done
 
-[[ -n "${MODE}" ]] || die "Must specify --no-delta or --with-delta"
-if [[ "${MODE}" == "no-delta" && -z "${RETRIEVE_VERSION}" ]]; then
-    die "--no-delta requires --retrieve-version VERSION (e.g. 20260417_051148)"
+[[ -n "${MODE}" ]] || die "Must specify --phase1 or --phase2"
+if [[ "${MODE}" == "phase1" && -z "${RETRIEVE_VERSION}" ]]; then
+    die "--phase1 requires --retrieve-version VERSION (e.g. 20260417_051148)"
 fi
 
 # --------------------------------------------------------------------------- #
-# 生成本次 retrain 的 VERSION（用于 Retrieve/ 和 Real_service/ 路径）
+# Generate VERSION for this retrain run
 # --------------------------------------------------------------------------- #
 VERSION=$(date +%Y%m%d_%H%M%S)
 log "========================================================"
@@ -64,34 +61,56 @@ echo "${VERSION}" > VERSION.txt
 mkdir -p logs
 
 # --------------------------------------------------------------------------- #
-# Step 1: 从 S3 下载数据
+# Phase 1: Download no-delta data → build ranker data → Ray Tune sweep
 # --------------------------------------------------------------------------- #
-log "========================================================"
-log "Step 1: Downloading data from S3"
-log "========================================================"
+if [[ "${MODE}" == "phase1" ]]; then
 
-if [[ "${MODE}" == "no-delta" ]]; then
+    log "========================================================"
+    log "Phase 1 — Step 1: Downloading data from S3 (no-delta)"
+    log "========================================================"
     bash scripts/download_data.sh --no-delta --retrieve-version "${RETRIEVE_VERSION}"
-else
-    bash scripts/download_data.sh --with-delta
+
+    log "========================================================"
+    log "Phase 1 — Step 2: Building ranker training data"
+    log "========================================================"
+    python3 -m src.ranker.data.build \
+        2>&1 | tee logs/ranker_data_build_${VERSION}.log
+
+    log "========================================================"
+    log "Phase 1 — Step 3: Ray Tune sweep"
+    log "========================================================"
+    python3 scripts/tune_phase1.py \
+        2>&1 | tee logs/ranker_tune_${VERSION}.log
+
+    echo ""
+    log "========================================================"
+    log "Phase 1 complete!"
+    log "  VERSION: ${VERSION}"
+    log "  MLflow UI: ${MLFLOW_TRACKING_URI:-http://129.114.25.207:8000/}"
+    log ""
+    log "Next: review MLflow results, then promote best run:"
+    log "  python3 scripts/promote.py --mode manual --retrieve-version ${RETRIEVE_VERSION}"
+    log "========================================================"
+
 fi
 
 # --------------------------------------------------------------------------- #
-# Step 2 (with-delta only): 合并 snapshot + delta
+# Phase 2: Download with-delta → merge → retriever rebuild → train → promote
 # --------------------------------------------------------------------------- #
-if [[ "${MODE}" == "with-delta" ]]; then
+if [[ "${MODE}" == "phase2" ]]; then
+
     log "========================================================"
-    log "Step 2: Merging snapshot + delta"
+    log "Phase 2 — Step 1: Downloading data from S3 (with-delta)"
+    log "========================================================"
+    bash scripts/download_data.sh --with-delta
+
+    log "========================================================"
+    log "Phase 2 — Step 2: Merging snapshot + delta"
     log "========================================================"
     python3 scripts/merge_delta.py
-fi
 
-# --------------------------------------------------------------------------- #
-# Step 3 (with-delta only): 重新构建 retriever artifacts
-# --------------------------------------------------------------------------- #
-if [[ "${MODE}" == "with-delta" ]]; then
     log "========================================================"
-    log "Step 3: Rebuilding retriever artifacts"
+    log "Phase 2 — Step 3: Rebuilding retriever artifacts"
     log "========================================================"
 
     log "  3.1/4 split.build ..."
@@ -110,7 +129,6 @@ if [[ "${MODE}" == "with-delta" ]]; then
     python3 -m src.retriever.pref_nn.build \
         2>&1 | tee logs/retriever_pref_nn_${VERSION}.log
 
-    # Upload new Retrieve/{VERSION}/ to S3
     log "  Uploading Retrieve/${VERSION}/ to S3 ..."
     for src_dst in \
         "artifacts/retriever/cooc/cooc_session.npz:Retrieve/${VERSION}/cooc_session.npz" \
@@ -127,36 +145,48 @@ if [[ "${MODE}" == "with-delta" ]]; then
     done
 
     RETRIEVE_VERSION="${VERSION}"
-    log "New Retrieve version: ${RETRIEVE_VERSION}"
+
+    log "========================================================"
+    log "Phase 2 — Step 4: Building ranker training data"
+    log "========================================================"
+    python3 -m src.ranker.data.build \
+        2>&1 | tee logs/ranker_data_build_${VERSION}.log
+
+    log "========================================================"
+    log "Phase 2 — Step 5: Fetching best Phase 1 hyperparams"
+    log "========================================================"
+    eval $(python3 scripts/get_best_params.py)
+    log "  batch_size=${BEST_BATCH_SIZE}  lr=${BEST_LR}  dropout=${BEST_DROPOUT}  epochs=${BEST_EPOCHS}"
+
+    log "========================================================"
+    log "Phase 2 — Step 6: Training ranker"
+    log "========================================================"
+    RETRAIN_EXPERIMENT="${EXPERIMENT:-retraining after online service}"
+    python3 -m src.ranker.train \
+        --mlflow-experiment "${RETRAIN_EXPERIMENT}" \
+        --run-name "retrain_${VERSION}" \
+        --batch-size "${BEST_BATCH_SIZE}" \
+        --lr "${BEST_LR}" \
+        --dropout "${BEST_DROPOUT}" \
+        --epochs "${BEST_EPOCHS}" \
+        --n-layers 2 \
+        2>&1 | tee logs/ranker_train_${VERSION}.log
+
+    log "========================================================"
+    log "Phase 2 — Step 7: Auto-promoting best model"
+    log "========================================================"
+    python3 scripts/promote.py \
+        --mode auto \
+        --retrieve-version "${RETRIEVE_VERSION}" \
+        --version "${VERSION}" \
+        2>&1 | tee logs/promote_${VERSION}.log
+
+    echo ""
+    log "========================================================"
+    log "Phase 2 complete!"
+    log "  VERSION:          ${VERSION}"
+    log "  Retrieve version: ${RETRIEVE_VERSION}"
+    log "  MLflow UI:        ${MLFLOW_TRACKING_URI:-http://129.114.25.207:8000/}"
+    log "========================================================"
+
 fi
-
-# --------------------------------------------------------------------------- #
-# Step 4: 构建 ranker 训练数据
-# --------------------------------------------------------------------------- #
-log "========================================================"
-log "Step 4: Building ranker training data"
-log "========================================================"
-python3 -m src.ranker.data.build \
-    2>&1 | tee logs/ranker_data_build_${VERSION}.log
-
-# --------------------------------------------------------------------------- #
-# Step 5: 超参数 sweep（训练）
-# --------------------------------------------------------------------------- #
-log "========================================================"
-log "Step 5: Running experiment sweep"
-log "========================================================"
-bash experiment_sweep.sh 2>&1 | tee logs/ranker_sweep_${VERSION}.log
-
-# --------------------------------------------------------------------------- #
-# 完成
-# --------------------------------------------------------------------------- #
-echo ""
-log "========================================================"
-log "Retrain complete!"
-log "  VERSION:          ${VERSION}"
-log "  Retrieve version: ${RETRIEVE_VERSION}"
-log "  MLflow UI:        ${MLFLOW_TRACKING_URI:-http://129.114.25.207:8000/}"
-log ""
-log "Next: review MLflow results, then promote best run:"
-log "  bash scripts/upload_results.sh --version ${VERSION} --retrieve-version ${RETRIEVE_VERSION}"
-log "========================================================"

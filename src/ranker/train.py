@@ -5,8 +5,13 @@ Joint loss: weighted BCE + 0.5 × pairwise BPR
 Evaluation: HR@5, NDCG@5, MRR@5 on 6-candidate val set
 
 CLI:
-  uv run python -m src.ranker.train
-  uv run python -m src.ranker.train --epochs 1 --batch-size 256  # dev smoke test
+  python3 -m src.ranker.train
+  python3 -m src.ranker.train --epochs 1 --batch-size 256  # dev smoke test
+
+Programmatic (called by scripts/tune_phase1.py):
+  from src.ranker.train import run
+  run(experiment="training before online service", batch_size=16384, lr=9.6e-3,
+      report_callback=lambda m: ray.train.report(m))
 """
 import argparse
 import json
@@ -126,7 +131,7 @@ def _make_lr_lambda(warmup_steps: int, total_steps: int):
 
 # ── Training loop ──────────────────────────────────────────────────────────────
 
-def train(args: argparse.Namespace) -> None:
+def train(args: argparse.Namespace, report_callback=None) -> None:
     # ── Device ───────────────────────────────────────────────────────────
     if args.device == "auto":
         device = (torch.device("cuda") if torch.cuda.is_available() else
@@ -257,6 +262,15 @@ def train(args: argparse.Namespace) -> None:
                 "peak_vram_mb": peak_vram_mb,
             }, step=epoch)
 
+            if report_callback is not None:
+                report_callback({
+                    "val_ndcg5":  val_m["NDCG@5"],
+                    "val_hr5":    val_m["HR@5"],
+                    "val_mrr5":   val_m["MRR@5"],
+                    "val_loss":   val_m["val_loss"],
+                    "train_loss": train_loss,
+                })
+
             # Checkpoint on NDCG@5 improvement
             if val_m["NDCG@5"] > best_ndcg:
                 best_ndcg = val_m["NDCG@5"]
@@ -280,6 +294,35 @@ def train(args: argparse.Namespace) -> None:
             mlflow.log_artifact(cfg_path)
 
     log.info(f"Training complete. Best NDCG@5={best_ndcg:.4f}  total={total_wall_s/60:.1f}min")
+
+
+def run(
+    experiment:    str   = "gru-ranker-training",
+    run_name:      str   = "gru-ranker",
+    epochs:        int   = 3,
+    batch_size:    int   = 512,
+    lr:            float = 1e-4,
+    weight_decay:  float = 1e-4,
+    max_norm:      float = 1.0,
+    device:        str   = "auto",
+    n_layers:      int   = 2,
+    dropout:       float = 0.1,
+    report_callback=None,
+) -> None:
+    """Programmatic entry point (e.g. called by scripts/tune_phase1.py)."""
+    args = argparse.Namespace(
+        epochs=epochs,
+        batch_size=batch_size,
+        lr=lr,
+        weight_decay=weight_decay,
+        max_norm=max_norm,
+        device=device,
+        n_layers=n_layers,
+        dropout=dropout,
+        mlflow_experiment=experiment,
+        run_name=run_name,
+    )
+    train(args, report_callback=report_callback)
 
 
 if __name__ == "__main__":
