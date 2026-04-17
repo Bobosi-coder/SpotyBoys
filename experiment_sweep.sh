@@ -10,7 +10,7 @@ set -euo pipefail
 
 # MLflow tracking URI is read from MLFLOW_TRACKING_URI env var
 # (set in docker-compose.yml or exported manually before running)
-EXPERIMENT="gru-ranker-sweep-for-first-implementation"
+EXPERIMENT="first_run_on_retraining_VM"
 LOG_DIR="logs"
 mkdir -p "${LOG_DIR}"
 
@@ -20,7 +20,7 @@ run_experiment() {
     local run_name="$1"; shift
     local log_file="${LOG_DIR}/ranker_${run_name}.log"
     log "▶ Starting: ${run_name}"
-    uv run python -m src.ranker.train \
+    python3 -m src.ranker.train \
         --mlflow-experiment "${EXPERIMENT}" \
         --run-name "${run_name}" \
         "$@" 2>&1 | tee "${log_file}"

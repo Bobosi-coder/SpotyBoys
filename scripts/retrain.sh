@@ -83,7 +83,7 @@ if [[ "${MODE}" == "with-delta" ]]; then
     log "========================================================"
     log "Step 2: Merging snapshot + delta"
     log "========================================================"
-    uv run python scripts/merge_delta.py
+    python3 scripts/merge_delta.py
 fi
 
 # --------------------------------------------------------------------------- #
@@ -95,19 +95,19 @@ if [[ "${MODE}" == "with-delta" ]]; then
     log "========================================================"
 
     log "  3.1/4 split.build ..."
-    uv run python -m src.retriever.split.build \
+    python3 -m src.retriever.split.build \
         2>&1 | tee logs/retriever_split_${VERSION}.log
 
     log "  3.2/4 cooc.build ..."
-    uv run python -m src.retriever.cooc.build \
+    python3 -m src.retriever.cooc.build \
         2>&1 | tee logs/retriever_cooc_${VERSION}.log
 
     log "  3.3/4 popularity.build ..."
-    uv run python -m src.retriever.popularity.build \
+    python3 -m src.retriever.popularity.build \
         2>&1 | tee logs/retriever_popularity_${VERSION}.log
 
     log "  3.4/4 pref_nn.build ..."
-    uv run python -m src.retriever.pref_nn.build \
+    python3 -m src.retriever.pref_nn.build \
         2>&1 | tee logs/retriever_pref_nn_${VERSION}.log
 
     # Upload new Retrieve/{VERSION}/ to S3
@@ -136,7 +136,7 @@ fi
 log "========================================================"
 log "Step 4: Building ranker training data"
 log "========================================================"
-uv run python -m src.ranker.data.build \
+python3 -m src.ranker.data.build \
     2>&1 | tee logs/ranker_data_build_${VERSION}.log
 
 # --------------------------------------------------------------------------- #

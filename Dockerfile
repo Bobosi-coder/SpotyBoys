@@ -3,21 +3,14 @@ FROM nvidia/cuda:12.1.0-cudnn8-devel-ubuntu22.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    curl git awscli python3-dev build-essential \
+    python3 python3-pip git awscli \
     && rm -rf /var/lib/apt/lists/*
-
-# Install uv
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh
-ENV PATH="/root/.local/bin:${PATH}"
 
 WORKDIR /app
 
-# Install Python dependencies (cached layer)
-COPY pyproject.toml uv.lock* ./
-RUN uv sync
-
-# Install ROCm-compatible or CUDA PyTorch depending on what uv sync gives us
-# (uv sync handles torch>=2.1.0 with CUDA extras from pyproject.toml)
+# Install Python dependencies
+COPY requirements.txt ./
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy source code and scripts
 COPY src/ ./src/
