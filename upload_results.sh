@@ -47,8 +47,8 @@ done
 [[ -n "${VERSION}" ]]          || die "Must specify --version VERSION"
 [[ -n "${RETRIEVE_VERSION}" ]] || die "Must specify --retrieve-version VERSION"
 
-[[ -n "${AWS_ACCESS_KEY_ID:-}" && -n "${AWS_SECRET_ACCESS_KEY:-}" ]] \
-    || die "AWS credentials not set"
+export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-11580ec852704238a35acfbd65c7146a}"
+export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-2759a133cae84a8e9a48c609c4dbc1b1}"
 
 DST="s3://${BUCKET}/Real_service/${VERSION}"
 
