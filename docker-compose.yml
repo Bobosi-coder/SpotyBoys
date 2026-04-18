@@ -13,13 +13,6 @@ services:
       - ./artifacts:/app/artifacts
       - ./logs:/app/logs
     shm_size: '10gb'
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
     # Override command at runtime:
     #   Phase 1 (initial training, Ray Tune sweep):
     #     docker-compose run training bash scripts/retrain.sh --phase1 --retrieve-version 20260417_051148
