@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import math
 import urllib.parse
 import urllib.request
@@ -33,14 +34,14 @@ class MediaAccessService:
         track = self.repository.get_playable_track(track_id)
         if not track:
             raise LookupError("track is not currently playable")
-        if not self.config or self.config.media_mode == "fixture-generated":
+        if not self.config or self.config.media_mode == "fixture_beep":
             return build_demo_wav_bytes(track_id), "audio/wav"
         if self.config.media_mode == "fixture-file":
             path = self.config.music_root / f"{track.navidrome_track_id}.wav"
             if not path.exists():
                 raise LookupError("mapped fixture media file is missing")
             return path.read_bytes(), "audio/wav"
-        if self.config.media_mode == "navidrome":
+        if self.config.media_mode in {"navidrome", "navidrome_fixture", "navidrome_vm_library"}:
             return self._stream_from_navidrome(str(track.navidrome_track_id))
         raise LookupError(f"unsupported media mode: {self.config.media_mode}")
 
@@ -62,7 +63,12 @@ class MediaAccessService:
         try:
             with urllib.request.urlopen(url, timeout=10) as response:
                 content_type = response.headers.get_content_type() or "application/octet-stream"
-                return response.read(), content_type
+                payload = response.read()
+                if content_type == "application/json":
+                    body = json.loads(payload.decode("utf-8"))
+                    if body.get("subsonic-response", {}).get("status") != "ok":
+                        raise LookupError("Navidrome stream request was rejected")
+                return payload, content_type
         except Exception as exc:
             raise LookupError("Navidrome stream is unavailable") from exc
 

@@ -1,1 +1,1 @@
-fixture user centroids placeholder for local contract validation
+{"user_demo": {"trk_003": 0.2, "trk_010": 0.3, "trk_007": 0.15}}

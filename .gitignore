@@ -36,6 +36,10 @@ docs/*
 !docs/iteration2_gap_analysis.md
 !docs/iteration2_execution_plan.md
 !docs/iteration2_validation_runbook.md
+!docs/iteration3_gap_analysis.md
+!docs/iteration3_execution_plan.md
+!docs/iteration3_validation_runbook.md
+!docs/iteration3_model_stack_verification.md
 *.tar
 *.pth
 !fixtures/serving_bundle/**/*.pt

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 from packages.config import load_config
@@ -13,7 +15,7 @@ def sync_catalog() -> int:
     payload = json.loads(Path(config.fixture_path).read_text(encoding="utf-8"))
     synced = 0
     for row in payload["tracks"]:
-        navidrome_track_id = row.get("navidrome_track_id")
+        navidrome_track_id = _resolve_navidrome_id(config, row) or row.get("navidrome_track_id")
         if not navidrome_track_id:
             continue
         availability = str(row.get("availability_status", "available"))
@@ -26,6 +28,41 @@ def sync_catalog() -> int:
         )
         synced += 1
     return synced
+
+
+def _resolve_navidrome_id(config, row: dict) -> str | None:
+    if config.media_mode not in {"navidrome_fixture", "navidrome_vm_library", "navidrome"}:
+        return None
+    songs = _search_songs(config, str(row["track_id"]))
+    if not songs:
+        songs = _search_songs(config, str(row["title"]))
+    marker = str(row["track_id"]).lower()
+    for song in songs:
+        haystack = " ".join(str(song.get(key, "")) for key in ["id", "title", "path", "album", "artist"]).lower()
+        if marker in haystack:
+            return str(song["id"])
+    return str(songs[0]["id"]) if songs else None
+
+
+def _search_songs(config, query_text: str) -> list[dict]:
+    query = {
+        "u": config.navidrome_username,
+        "p": config.navidrome_password,
+        "v": "1.16.1",
+        "c": "spotiboys",
+        "f": "json",
+        "query": query_text,
+    }
+    url = f"{config.navidrome_base_url}/rest/search3.view?{urllib.parse.urlencode(query)}"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return []
+    body = payload.get("subsonic-response", {})
+    if body.get("status") != "ok":
+        return []
+    return list(body.get("searchResult3", {}).get("song", []) or [])
 
 
 if __name__ == "__main__":

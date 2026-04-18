@@ -6,6 +6,7 @@ from typing import Dict, List, Optional, Tuple
 from packages.artifact_runtime import ServingBundle
 from packages.db_access.repositories import DemoRepository, PlayableTrackRecord
 from packages.db_access.runtime_state import InMemoryRuntimeState
+from packages.recommendation_engine.pipeline import PipelineTrace, ServingRecommendationPipeline
 from packages.shared_contracts.enums import BrowseSurfaceSlot, FallbackLevel
 from packages.shared_contracts.schemas import (
     BrowseSurface,
@@ -28,12 +29,17 @@ class RecommendationService:
         self.repository = repository
         self.runtime_state = runtime_state
         self.serving_bundle = serving_bundle
+        self.pipeline = ServingRecommendationPipeline(serving_bundle) if serving_bundle else None
 
     @property
     def model_version(self) -> str:
         if self.serving_bundle:
             return self.serving_bundle.model_version
         return "fixture-generated-fallback"
+
+    @property
+    def last_pipeline_trace(self) -> PipelineTrace | None:
+        return self.pipeline.last_trace if self.pipeline else None
 
     def build_bootstrap_surfaces(self, session_id: str, user_id: str) -> Tuple[BrowseSurface, List[QueueItem]]:
         request_id = f"req_bootstrap_{session_id}"
@@ -43,7 +49,7 @@ class RecommendationService:
     def recommend_next(self, request: RecommendationRequest) -> RecommendationResponse:
         request_id = request.request_id or f"req_{uuid.uuid4().hex}"
         impression_id = f"imp_{uuid.uuid4().hex}"
-        browse_surface, queue_items = self._compose_surfaces(request_id, impression_id)
+        browse_surface, queue_items = self._compose_surfaces(request_id, impression_id, request.session_id, request.user_id)
         queue = self.runtime_state.set_queue(
             request.session_id,
             queue_items,
@@ -72,8 +78,18 @@ class RecommendationService:
         )
         return response
 
-    def _compose_surfaces(self, request_id: str, impression_id: str) -> Tuple[BrowseSurface, List[QueueItem]]:
-        playable = self._rank_playable_tracks(self.repository.list_playable_tracks())
+    def _compose_surfaces(
+        self,
+        request_id: str,
+        impression_id: str,
+        session_id: str = "",
+        user_id: str = "",
+    ) -> Tuple[BrowseSurface, List[QueueItem]]:
+        playable = self._rank_playable_tracks(
+            self.repository.list_playable_tracks(),
+            session_id=session_id,
+            user_id=user_id,
+        )
         featured = playable[:4]
         random_items = playable[4:14]
         queue_tracks = playable[:8]
@@ -115,7 +131,19 @@ class RecommendationService:
             surface_slot=slot,
         )
 
-    def _rank_playable_tracks(self, playable: List[PlayableTrackRecord]) -> List[PlayableTrackRecord]:
+    def _rank_playable_tracks(
+        self,
+        playable: List[PlayableTrackRecord],
+        *,
+        session_id: str = "",
+        user_id: str = "",
+    ) -> List[PlayableTrackRecord]:
+        if self.pipeline:
+            return self.pipeline.recommend(
+                playable,
+                user_id=user_id or "user_demo",
+                recent_track_ids=self.runtime_state.recent_track_ids(session_id) if session_id else [],
+            )
         if not self.serving_bundle:
             return playable
         track_by_id: Dict[str, PlayableTrackRecord] = {track.track_id: track for track in playable}

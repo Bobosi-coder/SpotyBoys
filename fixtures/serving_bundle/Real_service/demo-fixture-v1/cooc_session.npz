@@ -1,1 +1,13 @@
-fixture cooc session placeholder for local contract validation
+track_id,score
+trk_001,0.62
+trk_002,0.52
+trk_003,0.82
+trk_004,0.45
+trk_005,0.65
+trk_006,0.55
+trk_007,0.70
+trk_008,0.48
+trk_009,0.44
+trk_010,0.88
+trk_011,0.58
+trk_012,0.53

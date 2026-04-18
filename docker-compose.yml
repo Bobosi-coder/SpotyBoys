@@ -26,9 +26,10 @@ services:
     build:
       context: .
       dockerfile: apps/recommendation-api/Dockerfile
-    command: ["python", "infra/scripts/generate_fixture_music.py", "--fixture", "/app/fixtures/demo_catalog.json", "--output-dir", "/music"]
+    command: ["python", "infra/scripts/generate_fixture_music.py", "--fixture", "/app/fixtures/demo_catalog.json", "--output-dir", "/music", "--source-root", "/app/data/raw/audio_previews"]
     volumes:
       - spotiboys-fixture-music:/music
+      - ./data/raw/audio_previews:/app/data/raw/audio_previews:ro
 
   navidrome:
     image: deluan/navidrome:latest
@@ -44,19 +45,34 @@ services:
     expose:
       - "4533"
 
+  navidrome-bootstrap:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "infra/scripts/bootstrap_navidrome.py"]
+    environment:
+      NAVIDROME_BASE_URL: http://navidrome:4533
+      NAVIDROME_USERNAME: spotiboys
+      NAVIDROME_PASSWORD: spotiboys
+    depends_on:
+      navidrome:
+        condition: service_started
+
   recommendation-api:
     build:
       context: .
       dockerfile: apps/recommendation-api/Dockerfile
     environment:
       SPOTIBOYS_RUNTIME_MODE: postgres
-      SPOTIBOYS_MEDIA_MODE: fixture-file
+      SPOTIBOYS_MEDIA_MODE: navidrome_fixture
       SPOTIBOYS_MUSIC_ROOT: /music
       SPOTIBOYS_SERVING_BUNDLE_PATH: /app/fixtures/serving_bundle/Real_service/demo-fixture-v1
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
       REDIS_URL: redis://redis:6379/0
       SPOTIBOYS_FIXTURE_PATH: /app/fixtures/demo_catalog.json
       NAVIDROME_BASE_URL: http://navidrome:4533
+      NAVIDROME_USERNAME: spotiboys
+      NAVIDROME_PASSWORD: spotiboys
     volumes:
       - spotiboys-fixture-music:/music:ro
     depends_on:
@@ -66,6 +82,8 @@ services:
         condition: service_healthy
       navidrome:
         condition: service_started
+      catalog-sync-worker:
+        condition: service_completed_successfully
 
   event-api:
     build:
@@ -92,11 +110,17 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
       REDIS_URL: redis://redis:6379/0
       SPOTIBOYS_FIXTURE_PATH: /app/fixtures/demo_catalog.json
+      SPOTIBOYS_MEDIA_MODE: navidrome_fixture
+      NAVIDROME_BASE_URL: http://navidrome:4533
+      NAVIDROME_USERNAME: spotiboys
+      NAVIDROME_PASSWORD: spotiboys
     depends_on:
       postgres:
         condition: service_healthy
       navidrome:
         condition: service_started
+      navidrome-bootstrap:
+        condition: service_completed_successfully
 
   outcome-deriver-worker:
     build:

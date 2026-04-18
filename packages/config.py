@@ -40,7 +40,7 @@ def load_config() -> AppConfig:
         fixture_path=Path(os.environ.get("SPOTIBOYS_FIXTURE_PATH", str(PROJECT_ROOT / "fixtures" / "demo_catalog.json"))),
         session_id=os.environ.get("SPOTIBOYS_SESSION_ID", "sess_demo"),
         user_id=os.environ.get("SPOTIBOYS_USER_ID", "user_demo"),
-        media_mode=os.environ.get("SPOTIBOYS_MEDIA_MODE", "fixture-generated").strip().lower(),
+        media_mode=os.environ.get("SPOTIBOYS_MEDIA_MODE", "navidrome_fixture").strip().lower(),
         music_root=Path(os.environ.get("SPOTIBOYS_MUSIC_ROOT", str(PROJECT_ROOT / ".local" / "fixture_music"))),
         navidrome_base_url=os.environ.get("NAVIDROME_BASE_URL", "http://navidrome:4533").rstrip("/"),
         navidrome_username=os.environ.get("NAVIDROME_USERNAME", "spotiboys"),

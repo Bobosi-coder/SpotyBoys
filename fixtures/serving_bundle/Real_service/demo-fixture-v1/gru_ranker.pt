@@ -1,1 +1,1 @@
-fixture ranker checkpoint placeholder for local contract validation
+{"base_weight": 0.72, "cooc_weight": 1.35, "centroid_weight": 0.85, "track_bias": {"trk_003": 0.62, "trk_010": 0.54, "trk_007": 0.18, "trk_004": -0.25}}

@@ -1,1 +1,13 @@
-fixture cooc playlist placeholder for local contract validation
+track_id,score
+trk_001,0.54
+trk_002,0.50
+trk_003,0.75
+trk_004,0.43
+trk_005,0.60
+trk_006,0.51
+trk_007,0.63
+trk_008,0.47
+trk_009,0.42
+trk_010,0.80
+trk_011,0.55
+trk_012,0.49

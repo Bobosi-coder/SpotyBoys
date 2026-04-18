@@ -66,7 +66,9 @@ class RedisRuntimeState:
         )
         pipe = self.client.pipeline()
         pipe.set(self._queue_key(session_id), state.json())
-        pipe.sadd(f"sess:{session_id}:recent_tracks", *[item.track_id for item in state.items])
+        track_ids = [item.track_id for item in state.items]
+        if track_ids:
+            pipe.sadd(f"sess:{session_id}:recent_tracks", *track_ids)
         pipe.execute()
         return state
 

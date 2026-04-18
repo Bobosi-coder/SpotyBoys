@@ -30,6 +30,12 @@
 - Iteration 2: added same-origin cover art fallback route.
 - Iteration 2: added fixture music generation, catalog-sync worker, outcome-deriver worker, and parser-export command.
 - Iteration 2: added root VM1 Compose, VM2 mimic Compose, and full integrated Compose files.
+- Iteration 3: default local media mode is now `navidrome_fixture`; generated tones are isolated to `fixture_beep`.
+- Iteration 3: fixture music generation now copies real MP3 preview files into the Navidrome library instead of generating WAV beeps.
+- Iteration 3: added Navidrome bootstrap and real Subsonic catalog reconciliation to actual Navidrome media IDs.
+- Iteration 3: `/stream/{track_id}` now proxies Navidrome audio in local fixture and VM library modes.
+- Iteration 3: added C1/C2/C3/C4 model-stack verification docs and a traceable serving pipeline.
+- Iteration 3: C2 retrieval, C3 ranker scoring, and C4 policy reranking now execute in the recommendation path.
 
 ## In Progress
 
@@ -51,6 +57,8 @@
 - `python3 -m unittest discover -s tests -v`
 - `bash infra/scripts/demo_up.sh`
 - `bash infra/scripts/healthcheck_demo.sh`
+- `docker compose -f docker-compose.yml exec -T postgres psql ... navidrome_track_mapping ...`
+- `docker compose -f docker-compose.yml exec -T recommendation-api python ... /stream/trk_001`
 - `docker compose -f infra/docker/docker-compose.demo.yml up --build -d`
 - `docker compose -f infra/docker/docker-compose.demo.yml down`
 - `python3 infra/scripts/validate_delta_manifest.py`
@@ -75,7 +83,7 @@
 
 ## Tests Run
 
-- `python3 -m unittest discover -s tests -v`: 12 tests passed.
+- `python3 -m unittest discover -s tests -v`: 15 tests passed.
 - `python3 -m compileall packages apps infra/scripts workers jobs tests`: passed.
 - `python3 infra/scripts/validate_delta_manifest.py`: passed.
 - `python3 infra/scripts/validate_serving_bundle.py`: passed.
@@ -85,6 +93,9 @@
 - `python3 infra/scripts/validate_serving_bundle.py fixtures/serving_bundle/Real_service/demo-fixture-v1/manifest.json`: passed.
 - `python3 infra/scripts/validate_delta_manifest.py fixtures/delta_manifest.json`: passed.
 - `bash infra/scripts/healthcheck_demo.sh`: passed against the Compose stack through nginx, including Postgres and Redis service status.
+- `bash infra/scripts/healthcheck_demo.sh`: iteration-3 check passed and verifies mapped stream returns real MP3/Navidrome fixture audio.
+- Live stream verification inside the recommendation API container returned `200 audio/mpeg` with MP3 `ID3` bytes for `/stream/trk_001`.
+- Postgres mapping verification showed canonical `trk_001`, `trk_003`, and `trk_010` mapped to actual Navidrome media IDs, not static `nav_001` placeholders.
 - VM1 Compose status shows nginx, frontend, recommendation API, event API, Postgres, Redis, and Navidrome running; fixture music and catalog sync completed successfully.
 - Live Postgres verification showed rows in recommendation impressions, rendered impressions, playback events, and feedback events.
 - Live Redis verification showed `sess:sess_demo:queue` and event idempotency keys.
@@ -105,9 +116,11 @@
 - Iteration 2 local full Navidrome streaming still requires final Subsonic bootstrap/reconciliation hardening; local deterministic validation uses fixture-file mode with the same first-party stream contract.
 - Initial VM1 Compose start failed to bind nginx to `5173` because the older iteration-1 `infra/docker/docker-compose.demo.yml` stack was still running. Stopped the old stack and restarted nginx successfully.
 - Ad hoc Python/curl localhost checks outside the approved health script are blocked by sandbox permissions; `bash infra/scripts/healthcheck_demo.sh` is the verified same-origin check path in this environment.
+- First iteration-3 rebuild exposed seed-order bug: recommendation API startup overwrote catalog-sync's real Navidrome IDs with fixture `nav_001` IDs. Fixed Postgres seed behavior so catalog-sync mappings are preserved.
+- Healthcheck exposed Redis `SADD` empty-argument failure when C4 policy removed all recent tracks. Fixed Redis empty queue handling and added policy fallback.
 
 ## Next Actions
 
-1. Harden local Navidrome Subsonic bootstrap so fixture streaming goes through Navidrome IDs instead of fixture-file mode.
-2. Extend artifact-backed recommendation runtime beyond `pop_scores.csv` to GRU/co-occurrence scoring.
+1. Replace the lightweight fixture GRU ranker with the production tensor GRU inference implementation.
+2. Add durable dislike/exploration policy inputs to C4.
 3. Add real parquet dependencies to the service image for parser export.

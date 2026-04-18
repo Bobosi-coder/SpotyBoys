@@ -72,13 +72,7 @@ class PostgresRepository:
                         INSERT INTO app.navidrome_track_mapping
                             (track_id, navidrome_track_id, mapping_confidence, availability_status, quarantine_reason, last_seen_in_navidrome_at)
                         VALUES (%s, %s, %s, %s, %s, CASE WHEN %s IS NULL THEN NULL ELSE NOW() END)
-                        ON CONFLICT (track_id) DO UPDATE SET
-                            navidrome_track_id = EXCLUDED.navidrome_track_id,
-                            mapping_confidence = EXCLUDED.mapping_confidence,
-                            availability_status = EXCLUDED.availability_status,
-                            quarantine_reason = EXCLUDED.quarantine_reason,
-                            last_seen_in_navidrome_at = EXCLUDED.last_seen_in_navidrome_at,
-                            updated_at = NOW()
+                        ON CONFLICT (track_id) DO NOTHING
                         """,
                         (
                             str(row["track_id"]),

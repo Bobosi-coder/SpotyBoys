@@ -37,6 +37,14 @@ for label, url in checks:
         raise SystemExit(1)
     print(f"OK {label}: HTTP {status}")
 
+with urllib.request.urlopen(f"{base}/stream/trk_001", timeout=5) as response:
+    content_type = response.headers.get("content-type", "")
+    prefix = response.read(8)
+if "audio/mpeg" not in content_type and not prefix.startswith(b"ID3"):
+    print(f"FAIL stream mapped is not real MP3/Navidrome fixture audio: {content_type} {prefix!r}")
+    raise SystemExit(1)
+print("OK stream mapped real fixture audio")
+
 try:
     urllib.request.urlopen(f"{base}/stream/trk_missing", timeout=5)
 except urllib.error.HTTPError as exc:
