@@ -32,7 +32,8 @@ from botocore.client import Config
 
 BUCKET   = "proj23-mlflow-artifacts"
 ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "https://chi.tacc.chameleoncloud.org:7480")
-EXPERIMENT = "training before online service"
+EXPERIMENT_PHASE1 = "training before online service"
+EXPERIMENT_PHASE2 = "retraining after online service"
 
 COMPOSITE_WEIGHTS = {"NDCG5": 0.5, "HR5": 0.3, "MRR5": 0.2}
 
@@ -82,11 +83,11 @@ def composite_score(metrics: dict) -> float:
 
 # ── MLflow helpers ────────────────────────────────────────────────────────────
 
-def _get_best_run():
+def _get_best_run(experiment: str) -> object:
     client = mlflow.MlflowClient()
-    exp = client.get_experiment_by_name(EXPERIMENT)
+    exp = client.get_experiment_by_name(experiment)
     if exp is None:
-        raise RuntimeError(f"MLflow experiment '{EXPERIMENT}' not found")
+        raise RuntimeError(f"MLflow experiment '{experiment}' not found")
     runs = client.search_runs(
         experiment_ids=[exp.experiment_id],
         filter_string="attributes.status = 'FINISHED'",
@@ -94,15 +95,18 @@ def _get_best_run():
         max_results=50,
     )
     if not runs:
-        raise RuntimeError(f"No finished runs in '{EXPERIMENT}'")
+        raise RuntimeError(f"No finished runs in '{experiment}'")
     return max(runs, key=lambda r: composite_score(r.data.metrics))
 
 
 def _download_ranker_artifacts(run_id: str, tmp_dir: str) -> tuple[str, str]:
     """Download gru_ranker.pt and gru_ranker_config.json from S3 artifact store."""
     s3 = _s3_client()
-    pt_key  = f"mlflow/2/{run_id}/artifacts/gru_ranker.pt"
-    cfg_key = f"mlflow/2/{run_id}/artifacts/gru_ranker_config.json"
+    # Look up experiment_id from the run to build the correct S3 path
+    client = mlflow.MlflowClient()
+    exp_id = client.get_run(run_id).info.experiment_id
+    pt_key  = f"mlflow/{exp_id}/{run_id}/artifacts/gru_ranker.pt"
+    cfg_key = f"mlflow/{exp_id}/{run_id}/artifacts/gru_ranker_config.json"
 
     pt_local  = os.path.join(tmp_dir, "gru_ranker.pt")
     cfg_local = os.path.join(tmp_dir, "gru_ranker_config.json")
@@ -134,12 +138,13 @@ def main() -> None:
     version = args.version or time.strftime("%Y%m%d_%H%M%S")
     s3 = _s3_client()
 
-    # ── Identify best run ─────────────────────────────────────────────────────
-    if args.mode == "auto" and os.environ.get("BEST_RUN_ID"):
-        client = mlflow.MlflowClient()
-        run = client.get_run(os.environ["BEST_RUN_ID"])
+    # ── Identify run to promote ───────────────────────────────────────────────
+    # manual: best composite run in Phase 1 experiment
+    # auto:   best composite run in Phase 2 experiment (the newly retrained model)
+    if args.mode == "manual":
+        run = _get_best_run(EXPERIMENT_PHASE1)
     else:
-        run = _get_best_run()
+        run = _get_best_run(EXPERIMENT_PHASE2)
 
     run_id  = run.info.run_id
     metrics = run.data.metrics
