@@ -18,6 +18,8 @@ services:
               count: 1
               capabilities: [gpu]
     # Override command at runtime:
-    #   docker-compose run training bash scripts/retrain.sh --no-delta --retrieve-version 20260417_051148
-    #   docker-compose run training bash scripts/retrain.sh --with-delta
-    command: ["bash", "-c", "echo 'Specify command: bash scripts/retrain.sh --no-delta|--with-delta [--retrieve-version VERSION]'"]
+    #   Phase 1 (initial training, Ray Tune sweep):
+    #     docker-compose run training bash scripts/retrain.sh --phase1 --retrieve-version 20260417_051148
+    #   Phase 2 (retrain after online delta):
+    #     docker-compose run training bash scripts/retrain.sh --phase2
+    command: ["bash", "-c", "echo 'Specify command: bash scripts/retrain.sh --phase1 --retrieve-version VERSION'"]
