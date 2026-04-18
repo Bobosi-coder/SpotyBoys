@@ -43,9 +43,10 @@ def compute_loss(
     weights:     torch.Tensor,   # (B*6,)
     is_positive: torch.Tensor,   # (B*6,) bool
     B: int,
+    bpr_weight:  float = 0.5,
 ) -> torch.Tensor:
     """
-    Pointwise BCE (weighted) + 0.5 × pairwise BPR.
+    Pointwise BCE (weighted) + bpr_weight × pairwise BPR.
 
     BPR: for each context, rank the 1 positive above each of the 5 negatives.
     Shapes: scores reshaped to (B, 6); is_positive selects [0,0] = anchor.
@@ -60,7 +61,7 @@ def compute_loss(
     neg_scores = scores_ctx[~is_pos_ctx].view(B, 5)  # (B, 5)
     loss_pair  = -F.logsigmoid(pos_score - neg_scores).mean()
 
-    return loss_point + 0.5 * loss_pair
+    return loss_point + bpr_weight * loss_pair
 
 
 # ── Evaluation ─────────────────────────────────────────────────────────────────
@@ -131,7 +132,7 @@ def _make_lr_lambda(warmup_steps: int, total_steps: int):
 
 # ── Training loop ──────────────────────────────────────────────────────────────
 
-def train(args: argparse.Namespace, report_callback=None) -> None:
+def train(args: argparse.Namespace, report_callback=None, bpr_weight: float = 0.5) -> None:
     # ── Device ───────────────────────────────────────────────────────────
     if args.device == "auto":
         device = (torch.device("cuda") if torch.cuda.is_available() else
@@ -191,6 +192,7 @@ def train(args: argparse.Namespace, report_callback=None) -> None:
             "lr":            args.lr,
             "weight_decay":  args.weight_decay,
             "max_norm":      args.max_norm,
+            "bpr_weight":    bpr_weight,
             "device":        str(device),
             "d_emb":         D_EMB,
             "n_labels":      N_LABELS,
@@ -220,7 +222,8 @@ def train(args: argparse.Namespace, report_callback=None) -> None:
                     batch["u_long"],    batch["cand_emb"],
                 )
                 loss = compute_loss(
-                    scores, batch["y"], batch["weight"], batch["is_positive"], B_eff
+                    scores, batch["y"], batch["weight"], batch["is_positive"], B_eff,
+                    bpr_weight=bpr_weight,
                 )
                 optimizer.zero_grad()
                 loss.backward()
@@ -307,6 +310,7 @@ def run(
     device:        str   = "auto",
     n_layers:      int   = 2,
     dropout:       float = 0.1,
+    bpr_weight:    float = 0.5,
     report_callback=None,
 ) -> None:
     """Programmatic entry point (e.g. called by scripts/tune_phase1.py)."""
@@ -322,7 +326,7 @@ def run(
         mlflow_experiment=experiment,
         run_name=run_name,
     )
-    train(args, report_callback=report_callback)
+    train(args, report_callback=report_callback, bpr_weight=bpr_weight)
 
 
 if __name__ == "__main__":
