@@ -35,6 +35,7 @@ log = logging.getLogger("tune_phase1")
 
 
 def train_trial(config: dict) -> None:
+    os.chdir("/app")  # Ray changes cwd per trial; reset to project root
     lr = config["batch_size"] / 4096 * 2.4e-3
 
     def _report(metrics: dict) -> None:
