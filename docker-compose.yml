@@ -7,6 +7,8 @@ services:
       - AWS_ENDPOINT_URL=https://chi.tacc.chameleoncloud.org:7480
       - MLFLOW_TRACKING_URI=http://129.114.25.207:8000/
       - PYTHONWARNINGS=ignore:Unverified HTTPS request
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     volumes:
       - ./artifacts:/app/artifacts
       - ./logs:/app/logs
