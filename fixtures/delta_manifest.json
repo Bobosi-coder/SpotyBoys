@@ -1,0 +1,16 @@
+{
+  "version": "20260417_160000",
+  "created_at": "2026-04-17T16:00:00Z",
+  "source": "vm1-postgres-parser",
+  "output_files": [
+    "session_tracks.parquet",
+    "session_meta.parquet",
+    "love.parquet",
+    "manifest.json"
+  ],
+  "row_counts": {
+    "session_tracks.parquet": 0,
+    "session_meta.parquet": 0,
+    "love.parquet": 0
+  }
+}

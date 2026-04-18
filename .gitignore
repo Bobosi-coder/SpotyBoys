@@ -23,6 +23,14 @@ data/raw/30music/*
 /venv/
 .DS_Store
 /audio_cache/
+.demo_gateway.pid
+.demo_gateway.log
 /docs/
+!docs/
+docs/*
+!docs/agent_kickoff_report.md
+!docs/contracts_summary.md
+!docs/implementation_progress.md
+!docs/demo_runbook.md
 *.tar
 *.pth

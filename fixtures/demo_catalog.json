@@ -1,0 +1,18 @@
+{
+  "tracks": [
+    {"track_id": "trk_001", "title": "Neon Harbor", "artist": "Mira Vale", "album": "Afterglow Maps", "duration_sec": 184, "cover_art_url": "/covers/trk_001", "is_playable": true, "navidrome_track_id": "nav_001", "availability_status": "available"},
+    {"track_id": "trk_002", "title": "Late Train Pulse", "artist": "North Arcade", "album": "Platform Lights", "duration_sec": 201, "cover_art_url": "/covers/trk_002", "is_playable": true, "navidrome_track_id": "nav_002", "availability_status": "available"},
+    {"track_id": "trk_003", "title": "Glass Room Echo", "artist": "Sol & Static", "album": "Clean Frequencies", "duration_sec": 176, "cover_art_url": "/covers/trk_003", "is_playable": true, "navidrome_track_id": "nav_003", "availability_status": "available"},
+    {"track_id": "trk_004", "title": "Soft Signal", "artist": "June Reactor", "album": "Signal Bloom", "duration_sec": 193, "cover_art_url": "/covers/trk_004", "is_playable": true, "navidrome_track_id": "nav_004", "availability_status": "available"},
+    {"track_id": "trk_005", "title": "Velvet Circuit", "artist": "The Luma Notes", "album": "Circuit Room", "duration_sec": 220, "cover_art_url": "/covers/trk_005", "is_playable": true, "navidrome_track_id": "nav_005", "availability_status": "available"},
+    {"track_id": "trk_006", "title": "Small Hours", "artist": "Echo Marina", "album": "Moonlit Index", "duration_sec": 167, "cover_art_url": "/covers/trk_006", "is_playable": true, "navidrome_track_id": "nav_006", "availability_status": "available"},
+    {"track_id": "trk_007", "title": "Skyline Drift", "artist": "Kelvin Blue", "album": "Highline", "duration_sec": 188, "cover_art_url": "/covers/trk_007", "is_playable": true, "navidrome_track_id": "nav_007", "availability_status": "available"},
+    {"track_id": "trk_008", "title": "Pocket Stars", "artist": "Moss Avenue", "album": "Star Arcade", "duration_sec": 205, "cover_art_url": "/covers/trk_008", "is_playable": true, "navidrome_track_id": "nav_008", "availability_status": "available"},
+    {"track_id": "trk_009", "title": "Amber Switch", "artist": "Nora Flux", "album": "Switchboard", "duration_sec": 159, "cover_art_url": "/covers/trk_009", "is_playable": true, "navidrome_track_id": "nav_009", "availability_status": "available"},
+    {"track_id": "trk_010", "title": "Tidal Keys", "artist": "River Relay", "album": "Keys In Motion", "duration_sec": 214, "cover_art_url": "/covers/trk_010", "is_playable": true, "navidrome_track_id": "nav_010", "availability_status": "available"},
+    {"track_id": "trk_011", "title": "Chrome Sunrise", "artist": "Index Bloom", "album": "Morning Cache", "duration_sec": 198, "cover_art_url": "/covers/trk_011", "is_playable": true, "navidrome_track_id": "nav_011", "availability_status": "available"},
+    {"track_id": "trk_012", "title": "Signal Hearts", "artist": "Quiet Metric", "album": "Metric Love", "duration_sec": 182, "cover_art_url": "/covers/trk_012", "is_playable": true, "navidrome_track_id": "nav_012", "availability_status": "available"},
+    {"track_id": "trk_missing", "title": "Unmapped Demo Track", "artist": "Fixture Only", "album": "Quarantine", "duration_sec": 180, "cover_art_url": "/covers/trk_missing", "is_playable": false, "navidrome_track_id": null, "availability_status": "missing"},
+    {"track_id": "trk_quarantined", "title": "Quarantined Demo Track", "artist": "Fixture Only", "album": "Quarantine", "duration_sec": 180, "cover_art_url": "/covers/trk_quarantined", "is_playable": true, "navidrome_track_id": "nav_bad", "availability_status": "quarantined", "quarantine_reason": "fixture quarantine"}
+  ]
+}

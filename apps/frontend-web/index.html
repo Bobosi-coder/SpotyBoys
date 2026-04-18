@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SpotiBoys</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <main class="stage">
+      <section class="shell" data-testid="app-shell">
+        <aside class="brand-rail" data-testid="left-brand-rail">SpotiBoys</aside>
+        <section class="content">
+          <div id="status" class="status hidden" data-testid="status-banner"></div>
+          <section class="featured-wrap">
+            <div class="section-heading">
+              <p>Featured</p>
+              <span id="model-version"></span>
+            </div>
+            <div id="featured" class="featured-grid" data-testid="featured-recommendations"></div>
+          </section>
+          <section class="carousel-wrap">
+            <div class="section-heading">
+              <p>Random songs</p>
+              <span id="queue-revision"></span>
+            </div>
+            <div id="random-carousel" class="random-carousel" data-testid="random-songs-carousel"></div>
+          </section>
+        </section>
+        <aside id="playlist-drawer" class="playlist-drawer" data-testid="playlist-drawer" aria-hidden="true">
+          <div class="drawer-head">
+            <p>Playlist</p>
+            <button id="close-drawer" class="icon-button" aria-label="Close playlist">x</button>
+          </div>
+          <ol id="queue-list" class="queue-list"></ol>
+        </aside>
+        <footer class="player-dock" data-testid="bottom-player-dock">
+          <div class="now-playing">
+            <div id="now-cover" class="now-cover"></div>
+            <div>
+              <p id="now-title">Ready</p>
+              <span id="now-artist">Demo session</span>
+            </div>
+          </div>
+          <div class="dock-controls" data-testid="dock-primary-controls">
+            <button id="skip-back" class="dock-button" aria-label="Skip back">&lt;&lt;</button>
+            <button id="play-pause" class="dock-button primary" aria-label="Play or pause">Play</button>
+            <button id="skip-next" class="dock-button" aria-label="Skip next">&gt;&gt;</button>
+            <button id="playlist-button" class="dock-button" aria-label="Open playlist" data-testid="playlist-button">List</button>
+          </div>
+          <audio id="audio-player" preload="none"></audio>
+        </footer>
+      </section>
+    </main>
+    <script>
+      if (location.search.includes("gateway=1")) {
+        window.SPOTIBOYS_RECOMMENDATION_API = location.origin;
+        window.SPOTIBOYS_EVENT_API = location.origin;
+      }
+    </script>
+    <script src="./src/app.js"></script>
+  </body>
+</html>

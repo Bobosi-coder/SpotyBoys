@@ -1,0 +1,15 @@
+{
+  "version": "demo-fixture-v1",
+  "created_at": "2026-04-17T16:00:00Z",
+  "model_version": "demo-fixture-v1",
+  "artifacts": [
+    "gru_ranker.pt",
+    "gru_ranker_config.json",
+    "cooc_session.npz",
+    "cooc_playlist.npz",
+    "user_centroids.pkl",
+    "pop_scores.csv",
+    "manifest.json"
+  ],
+  "checksums": {}
+}

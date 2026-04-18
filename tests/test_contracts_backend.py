@@ -1,0 +1,123 @@
+from __future__ import annotations
+
+import json
+import unittest
+from datetime import datetime, timezone
+from pathlib import Path
+
+from packages.db_access.demo_bootstrap import reset_demo_components
+from packages.navidrome_adapter import MediaAccessService
+from packages.recommendation_engine import RecommendationService
+from packages.shared_contracts.enums import BrowseSurfaceSlot, PlaybackEventType
+from packages.shared_contracts.manifests import (
+    validate_delta_manifest,
+    validate_serving_bundle_manifest,
+)
+from packages.shared_contracts.schemas import (
+    BootstrapResponse,
+    DegradedState,
+    ImpressionEventRequest,
+    PlaybackEventRequest,
+    QueueState,
+    RecommendationRequest,
+)
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+class BackendContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.repository, self.runtime = reset_demo_components()
+        self.recommender = RecommendationService(self.repository, self.runtime)
+        self.media = MediaAccessService(self.repository)
+
+    def test_bootstrap_contract_shape_and_queue_default_closed(self) -> None:
+        browse_surface, queue_items = self.recommender.build_bootstrap_surfaces("sess_test", "user_test")
+        queue = self.runtime.set_queue("sess_test", queue_items)
+        payload = BootstrapResponse(
+            session_id="sess_test",
+            user_id="user_test",
+            auth_state="authenticated",
+            browse_surface=browse_surface,
+            queue=QueueState(items=queue.items, revision=queue.revision, drawer_default_open=False),
+            current_track=None,
+            degraded=DegradedState(),
+        )
+
+        self.assertEqual(payload.auth_state, "authenticated")
+        self.assertFalse(payload.queue.drawer_default_open)
+        self.assertLessEqual(len(payload.browse_surface.featured_items), 4)
+        self.assertLessEqual(len(payload.browse_surface.random_carousel_items), 10)
+        self.assertGreater(len(payload.queue.items), 0)
+
+    def test_recommendations_are_playable_only_and_impression_is_persisted(self) -> None:
+        response = self.recommender.recommend_next(
+            RecommendationRequest(session_id="sess_test", user_id="user_test")
+        )
+        returned_ids = [item.track_id for item in response.queue.items]
+
+        self.assertIn(response.impression_id, self.repository.recommendation_impressions)
+        self.assertLessEqual(len(response.browse_surface.featured_items), 4)
+        self.assertLessEqual(len(response.browse_surface.random_carousel_items), 10)
+        self.assertNotIn("trk_missing", returned_ids)
+        self.assertNotIn("trk_quarantined", returned_ids)
+        for track_id in returned_ids:
+            self.assertIsNotNone(self.repository.get_playable_track(track_id))
+
+    def test_event_idempotency(self) -> None:
+        impression = ImpressionEventRequest(
+            impression_id="imp_once",
+            request_id="req_once",
+            session_id="sess_test",
+            user_id="user_test",
+            visible_items=[{"track_id": "trk_001", "surface_slot": BrowseSurfaceSlot.FEATURED_1}],
+            surface="browse_surface",
+            rendered_at=datetime.now(timezone.utc),
+        )
+        self.assertTrue(self.runtime.remember_once("idem:impression", impression.impression_id))
+        self.repository.persist_rendered_impression(impression.impression_id, impression.dict())
+        self.assertFalse(self.runtime.remember_once("idem:impression", impression.impression_id))
+
+        playback = PlaybackEventRequest(
+            event_id="evt_once",
+            event_type=PlaybackEventType.PLAYBACK_START,
+            session_id="sess_test",
+            user_id="user_test",
+            track_id="trk_001",
+            request_id="req_once",
+            impression_id="imp_once",
+            position_ms=0,
+            playback_ms=0,
+            occurred_at=datetime.now(timezone.utc),
+            client_event_seq=1,
+        )
+        self.assertTrue(self.runtime.remember_once("idem:playback", playback.event_id))
+        self.repository.persist_playback_event(playback.event_id, playback.dict())
+        self.assertFalse(self.runtime.remember_once("idem:playback", playback.event_id))
+        self.assertEqual(len(self.repository.playback_events), 1)
+
+    def test_stream_proxy_fail_closed(self) -> None:
+        payload, media_type = self.media.stream_bytes("trk_001")
+        self.assertEqual(media_type, "audio/wav")
+        self.assertGreater(len(payload), 100)
+
+        with self.assertRaises(LookupError):
+            self.media.stream_bytes("trk_missing")
+        with self.assertRaises(LookupError):
+            self.media.resolve_playable_track("trk_quarantined")
+
+    def test_manifest_validators(self) -> None:
+        serving_manifest = json.loads((PROJECT_ROOT / "fixtures" / "serving_bundle_manifest.json").read_text())
+        validate_serving_bundle_manifest(serving_manifest)
+
+        bad_manifest = dict(serving_manifest)
+        bad_manifest["artifacts"] = list(serving_manifest["artifacts"]) + ["track_index.faiss"]
+        with self.assertRaises(ValueError):
+            validate_serving_bundle_manifest(bad_manifest)
+
+        delta_manifest = json.loads((PROJECT_ROOT / "fixtures" / "delta_manifest.json").read_text())
+        validate_delta_manifest(delta_manifest)
+
+
+if __name__ == "__main__":
+    unittest.main()

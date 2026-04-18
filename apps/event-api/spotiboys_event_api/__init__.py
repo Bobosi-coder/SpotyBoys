@@ -1,0 +1,1 @@
+"""SpotiBoys event API."""
