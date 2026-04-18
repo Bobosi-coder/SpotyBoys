@@ -10,6 +10,7 @@ services:
     volumes:
       - ./artifacts:/app/artifacts
       - ./logs:/app/logs
+    shm_size: '10gb'
     deploy:
       resources:
         reservations:

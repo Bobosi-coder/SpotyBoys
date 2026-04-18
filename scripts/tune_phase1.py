@@ -90,8 +90,6 @@ def main() -> None:
         max_t=args.max_epochs,
         grace_period=1,
         reduction_factor=2,
-        metric="val_ndcg5",
-        mode="max",
     )
 
     tuner = tune.Tuner(
