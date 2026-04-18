@@ -5,13 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${PROJECT_ROOT}"
 
-MODE="${1:-gateway}"
+MODE="${1:-compose}"
 
 if [ "${MODE}" = "compose" ]; then
-  docker compose -f infra/docker/docker-compose.demo.yml up --build -d
+  docker compose -f docker-compose.yml up --build -d
   echo "Frontend: http://127.0.0.1:5173/"
-  echo "Recommendation API: http://127.0.0.1:8001/health"
-  echo "Event API: http://127.0.0.1:8002/health"
+  echo "Recommendation health: http://127.0.0.1:5173/recommendation-health"
+  echo "Event health: http://127.0.0.1:5173/event-health"
   exit 0
 fi
 

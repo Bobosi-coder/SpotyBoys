@@ -25,6 +25,7 @@ data/raw/30music/*
 /audio_cache/
 .demo_gateway.pid
 .demo_gateway.log
+.local/
 /docs/
 !docs/
 docs/*
@@ -32,5 +33,9 @@ docs/*
 !docs/contracts_summary.md
 !docs/implementation_progress.md
 !docs/demo_runbook.md
+!docs/iteration2_gap_analysis.md
+!docs/iteration2_execution_plan.md
+!docs/iteration2_validation_runbook.md
 *.tar
 *.pth
+!fixtures/serving_bundle/**/*.pt

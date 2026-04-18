@@ -5,6 +5,8 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+from packages.artifact_runtime import ServingBundle
+from packages.config import AppConfig
 from packages.db_access.demo_bootstrap import reset_demo_components
 from packages.navidrome_adapter import MediaAccessService
 from packages.recommendation_engine import RecommendationService
@@ -28,7 +30,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 class BackendContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repository, self.runtime = reset_demo_components()
-        self.recommender = RecommendationService(self.repository, self.runtime)
+        self.bundle = ServingBundle.load(PROJECT_ROOT / "fixtures" / "serving_bundle" / "Real_service" / "demo-fixture-v1")
+        self.recommender = RecommendationService(self.repository, self.runtime, self.bundle)
         self.media = MediaAccessService(self.repository)
 
     def test_bootstrap_contract_shape_and_queue_default_closed(self) -> None:
@@ -63,6 +66,8 @@ class BackendContractTests(unittest.TestCase):
         self.assertNotIn("trk_quarantined", returned_ids)
         for track_id in returned_ids:
             self.assertIsNotNone(self.repository.get_playable_track(track_id))
+        self.assertEqual(response.model_version, "demo-fixture-v1")
+        self.assertEqual(response.browse_surface.featured_items[0].track_id, "trk_004")
 
     def test_event_idempotency(self) -> None:
         impression = ImpressionEventRequest(
@@ -105,6 +110,37 @@ class BackendContractTests(unittest.TestCase):
             self.media.stream_bytes("trk_missing")
         with self.assertRaises(LookupError):
             self.media.resolve_playable_track("trk_quarantined")
+
+    def test_fixture_file_media_mode_streams_mapped_bytes(self) -> None:
+        from infra.scripts.generate_fixture_music import generate_fixture_music
+
+        output = PROJECT_ROOT / ".local" / "test_fixture_music"
+        generate_fixture_music(PROJECT_ROOT / "fixtures" / "demo_catalog.json", output)
+        media = MediaAccessService(
+            self.repository,
+            AppConfig(
+                runtime_mode="fixture",
+                database_url="",
+                redis_url="",
+                fixture_path=PROJECT_ROOT / "fixtures" / "demo_catalog.json",
+                session_id="sess_test",
+                user_id="user_test",
+                media_mode="fixture-file",
+                music_root=output,
+                navidrome_base_url="http://navidrome:4533",
+                navidrome_username="spotiboys",
+                navidrome_password="spotiboys",
+                navidrome_token="",
+                navidrome_salt="",
+                serving_bundle_path=PROJECT_ROOT / "fixtures" / "serving_bundle" / "Real_service" / "demo-fixture-v1",
+                object_storage_root=PROJECT_ROOT / ".local" / "object_storage",
+                object_storage_endpoint="file://.local/object_storage",
+                mlflow_tracking_uri="http://mlflow:5000",
+            ),
+        )
+        payload, media_type = media.stream_bytes("trk_001")
+        self.assertEqual(media_type, "audio/wav")
+        self.assertGreater(len(payload), 100)
 
     def test_manifest_validators(self) -> None:
         serving_manifest = json.loads((PROJECT_ROOT / "fixtures" / "serving_bundle_manifest.json").read_text())

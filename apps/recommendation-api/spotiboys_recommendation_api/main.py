@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+from packages.artifact_runtime import ServingBundle
 from packages.config import load_config
 from packages.db_access.factory import build_repository_and_runtime
 from packages.navidrome_adapter import MediaAccessService
@@ -21,8 +22,14 @@ SESSION_ID = config.session_id
 USER_ID = config.user_id
 
 repository, runtime_state = build_repository_and_runtime(config)
-recommendation_service = RecommendationService(repository, runtime_state)
-media_service = MediaAccessService(repository)
+serving_bundle = ServingBundle.load(config.serving_bundle_path)
+repository.register_active_model_version(
+    serving_bundle.model_version,
+    serving_bundle.version,
+    str(config.serving_bundle_path / "manifest.json"),
+)
+recommendation_service = RecommendationService(repository, runtime_state, serving_bundle)
+media_service = MediaAccessService(repository, config=config)
 
 app = FastAPI(title="SpotiBoys Recommendation API", version="0.1.0")
 app.add_middleware(
@@ -44,6 +51,9 @@ def ready() -> dict:
         "status": "ready",
         "playable_tracks": len(repository.list_playable_tracks()),
         "runtime_state": config.runtime_mode,
+        "model_version": serving_bundle.model_version,
+        "serving_bundle_version": serving_bundle.version,
+        "media_mode": config.media_mode,
     }
 
 
@@ -92,3 +102,19 @@ def stream(track_id: str) -> Response:
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return Response(content=payload, media_type=media_type)
+
+
+@app.get("/covers/{track_id}")
+def cover_art(track_id: str) -> Response:
+    track = repository.get_track(track_id)
+    if not track:
+        raise HTTPException(status_code=404, detail="track not found")
+    initials = "".join(part[:1] for part in track.title.split()[:2]).upper() or "SB"
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" width="600" height="600" viewBox="0 0 600 600">
+  <rect width="600" height="600" fill="#141414"/>
+  <circle cx="470" cy="128" r="96" fill="#1db954" opacity="0.86"/>
+  <circle cx="112" cy="468" r="132" fill="#7dd3fc" opacity="0.42"/>
+  <text x="48" y="332" font-family="Arial, sans-serif" font-size="138" font-weight="700" fill="#f8fafc">{initials}</text>
+  <text x="52" y="390" font-family="Arial, sans-serif" font-size="30" fill="#d1d5db">{track.artist}</text>
+</svg>"""
+    return Response(content=svg, media_type="image/svg+xml")

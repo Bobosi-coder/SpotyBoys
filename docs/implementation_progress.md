@@ -22,16 +22,24 @@
 - Added parser delta and serving bundle manifest validator commands.
 - Started the full Compose stack and verified same-origin health checks.
 - Rebuilt the stack after final recommendation-surface update; services remain running.
+- Iteration 2: added file-grounded gap analysis, execution plan, and validation runbook.
+- Iteration 2: added config for media mode, music root, Navidrome, serving bundle path, object-storage root, and MLflow URI.
+- Iteration 2: added manifest-confirmed serving bundle loader and fixture `Real_service/demo-fixture-v1` bundle.
+- Iteration 2: recommendation service now ranks through the serving-bundle boundary while filtering to playable tracks.
+- Iteration 2: media access now supports generated-test bytes, fixture-file streaming, and Navidrome proxy mode.
+- Iteration 2: added same-origin cover art fallback route.
+- Iteration 2: added fixture music generation, catalog-sync worker, outcome-deriver worker, and parser-export command.
+- Iteration 2: added root VM1 Compose, VM2 mimic Compose, and full integrated Compose files.
 
 ## In Progress
 
-- Demo stack is running for browser review at `http://127.0.0.1:5173`.
+- VM1 Compose stack is running for browser review at `http://127.0.0.1:5173`.
 
 ## Remaining
 
-- Replace fixture recommender with current retriever/ranker artifact runtime.
-- Connect real Navidrome library mapping once credentials and service are available.
-- Expand retraining parser from scaffold into parquet writer.
+- Complete full Navidrome Subsonic user bootstrap and scan-ID reconciliation for local fixture libraries.
+- Extend artifact-backed recommendation runtime beyond `pop_scores.csv` to GRU/co-occurrence scoring.
+- Upgrade parser export from CSV-compatible contract files to real parquet in the service image.
 
 ## Commands Run
 
@@ -52,14 +60,32 @@
 - `docker compose -f infra/docker/docker-compose.demo.yml ps`
 - `docker compose -f infra/docker/docker-compose.demo.yml exec -T postgres psql ...`
 - `docker compose -f infra/docker/docker-compose.demo.yml exec -T redis sh -c "redis-cli keys ..."`
+- `sed -n ...` source-of-truth and current implementation audit commands.
+- `python3 -m unittest discover -s tests -v`
+- `python3 -m compileall packages apps infra/scripts workers jobs tests`
+- `docker compose -f docker-compose.yml config`
+- `docker compose -f docker-compose.vm2.yml config`
+- `docker compose -f docker-compose.full.yml config`
+- `python3 infra/scripts/validate_serving_bundle.py fixtures/serving_bundle/Real_service/demo-fixture-v1/manifest.json`
+- `python3 infra/scripts/validate_delta_manifest.py fixtures/delta_manifest.json`
+- `bash infra/scripts/demo_up.sh compose`
+- `docker compose -f infra/docker/docker-compose.demo.yml down`
+- `docker compose -f docker-compose.yml up -d nginx`
+- `bash infra/scripts/healthcheck_demo.sh`
 
 ## Tests Run
 
-- `python3 -m unittest discover -s tests -v`: 11 tests passed.
-- `python3 -m compileall packages apps infra/scripts tests`: passed.
+- `python3 -m unittest discover -s tests -v`: 12 tests passed.
+- `python3 -m compileall packages apps infra/scripts workers jobs tests`: passed.
 - `python3 infra/scripts/validate_delta_manifest.py`: passed.
 - `python3 infra/scripts/validate_serving_bundle.py`: passed.
+- `docker compose -f docker-compose.yml config`: passed.
+- `docker compose -f docker-compose.vm2.yml config`: passed.
+- `docker compose -f docker-compose.full.yml config`: passed.
+- `python3 infra/scripts/validate_serving_bundle.py fixtures/serving_bundle/Real_service/demo-fixture-v1/manifest.json`: passed.
+- `python3 infra/scripts/validate_delta_manifest.py fixtures/delta_manifest.json`: passed.
 - `bash infra/scripts/healthcheck_demo.sh`: passed against the Compose stack through nginx, including Postgres and Redis service status.
+- VM1 Compose status shows nginx, frontend, recommendation API, event API, Postgres, Redis, and Navidrome running; fixture music and catalog sync completed successfully.
 - Live Postgres verification showed rows in recommendation impressions, rendered impressions, playback events, and feedback events.
 - Live Redis verification showed `sess:sess_demo:queue` and event idempotency keys.
 - Foreground gateway health check passed once:
@@ -76,9 +102,12 @@
 - Background Python gateway processes are killed by the execution environment after the shell exits, even with `nohup`; the gateway works in foreground and Docker Compose builds/starts.
 - Docker Compose stack was started and then stopped before endpoint health checks because the user requested evaluation before demo spin-up.
 - Background local gateway remains unreliable in this execution environment; Docker Compose is the active demo path.
+- Iteration 2 local full Navidrome streaming still requires final Subsonic bootstrap/reconciliation hardening; local deterministic validation uses fixture-file mode with the same first-party stream contract.
+- Initial VM1 Compose start failed to bind nginx to `5173` because the older iteration-1 `infra/docker/docker-compose.demo.yml` stack was still running. Stopped the old stack and restarted nginx successfully.
+- Ad hoc Python/curl localhost checks outside the approved health script are blocked by sandbox permissions; `bash infra/scripts/healthcheck_demo.sh` is the verified same-origin check path in this environment.
 
 ## Next Actions
 
-1. Keep the Compose demo running for browser review.
-2. Replace fixture recommender with model-backed runtime when artifact integration is prioritized.
-3. Replace deterministic WAV media stub with real Navidrome once credentials and library mapping are available.
+1. Harden local Navidrome Subsonic bootstrap so fixture streaming goes through Navidrome IDs instead of fixture-file mode.
+2. Extend artifact-backed recommendation runtime beyond `pop_scores.csv` to GRU/co-occurrence scoring.
+3. Add real parquet dependencies to the service image for parser export.

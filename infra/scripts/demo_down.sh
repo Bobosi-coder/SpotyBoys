@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${PROJECT_ROOT}"
 
-if [ "${1:-gateway}" = "compose" ]; then
-  docker compose -f infra/docker/docker-compose.demo.yml down
+if [ "${1:-compose}" = "compose" ]; then
+  docker compose -f docker-compose.yml down
   exit 0
 fi
 

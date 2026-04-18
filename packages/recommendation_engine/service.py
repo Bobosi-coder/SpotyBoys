@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import uuid
-from typing import List, Tuple
+from typing import Dict, List, Optional, Tuple
 
+from packages.artifact_runtime import ServingBundle
 from packages.db_access.repositories import DemoRepository, PlayableTrackRecord
 from packages.db_access.runtime_state import InMemoryRuntimeState
 from packages.shared_contracts.enums import BrowseSurfaceSlot, FallbackLevel
@@ -17,13 +18,22 @@ from packages.shared_contracts.schemas import (
 )
 
 
-MODEL_VERSION = "demo-fixture-v1"
-
-
 class RecommendationService:
-    def __init__(self, repository: DemoRepository, runtime_state: InMemoryRuntimeState) -> None:
+    def __init__(
+        self,
+        repository: DemoRepository,
+        runtime_state: InMemoryRuntimeState,
+        serving_bundle: Optional[ServingBundle] = None,
+    ) -> None:
         self.repository = repository
         self.runtime_state = runtime_state
+        self.serving_bundle = serving_bundle
+
+    @property
+    def model_version(self) -> str:
+        if self.serving_bundle:
+            return self.serving_bundle.model_version
+        return "fixture-generated-fallback"
 
     def build_bootstrap_surfaces(self, session_id: str, user_id: str) -> Tuple[BrowseSurface, List[QueueItem]]:
         request_id = f"req_bootstrap_{session_id}"
@@ -42,7 +52,7 @@ class RecommendationService:
         response = RecommendationResponse(
             request_id=request_id,
             impression_id=impression_id,
-            model_version=MODEL_VERSION,
+            model_version=self.model_version,
             fallback_level=FallbackLevel.NONE,
             browse_surface=browse_surface,
             queue=QueueUpdate(items=queue.items, revision=queue.revision),
@@ -53,7 +63,7 @@ class RecommendationService:
                 "request_id": request_id,
                 "session_id": request.session_id,
                 "user_id": request.user_id,
-                "model_version": MODEL_VERSION,
+                "model_version": self.model_version,
                 "fallback_level": FallbackLevel.NONE.value,
                 "browse_surface": response.browse_surface.dict(),
                 "queue": response.queue.dict(),
@@ -63,7 +73,7 @@ class RecommendationService:
         return response
 
     def _compose_surfaces(self, request_id: str, impression_id: str) -> Tuple[BrowseSurface, List[QueueItem]]:
-        playable = self.repository.list_playable_tracks()
+        playable = self._rank_playable_tracks(self.repository.list_playable_tracks())
         featured = playable[:4]
         random_items = playable[4:14]
         queue_tracks = playable[:8]
@@ -104,3 +114,17 @@ class RecommendationService:
             cover_art_url=track.cover_art_url,
             surface_slot=slot,
         )
+
+    def _rank_playable_tracks(self, playable: List[PlayableTrackRecord]) -> List[PlayableTrackRecord]:
+        if not self.serving_bundle:
+            return playable
+        track_by_id: Dict[str, PlayableTrackRecord] = {track.track_id: track for track in playable}
+        ranked: List[PlayableTrackRecord] = []
+        seen = set()
+        for track_id in self.serving_bundle.ranked_track_ids():
+            track = track_by_id.get(track_id)
+            if track:
+                ranked.append(track)
+                seen.add(track_id)
+        ranked.extend(track for track in playable if track.track_id not in seen)
+        return ranked

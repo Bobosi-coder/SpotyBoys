@@ -155,5 +155,5 @@ PY
 
 if command -v docker >/dev/null 2>&1; then
   echo "Compose service status:"
-  docker compose -f "${PROJECT_ROOT}/infra/docker/docker-compose.demo.yml" ps postgres redis recommendation-api event-api frontend-web nginx
+  docker compose -f "${PROJECT_ROOT}/docker-compose.yml" ps postgres redis navidrome recommendation-api event-api frontend-web nginx
 fi

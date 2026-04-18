@@ -1,0 +1,135 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: spotiboys
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./db:/docker-entrypoint-initdb.d:ro
+      - spotiboys-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d spotiboys"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  fixture-music:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "infra/scripts/generate_fixture_music.py", "--fixture", "/app/fixtures/demo_catalog.json", "--output-dir", "/music"]
+    volumes:
+      - spotiboys-fixture-music:/music
+
+  navidrome:
+    image: deluan/navidrome:latest
+    environment:
+      ND_SCANSCHEDULE: "1m"
+      ND_LOGLEVEL: info
+    volumes:
+      - spotiboys-navidrome-data:/data
+      - spotiboys-fixture-music:/music:ro
+    depends_on:
+      fixture-music:
+        condition: service_completed_successfully
+    expose:
+      - "4533"
+
+  recommendation-api:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    environment:
+      SPOTIBOYS_RUNTIME_MODE: postgres
+      SPOTIBOYS_MEDIA_MODE: fixture-file
+      SPOTIBOYS_MUSIC_ROOT: /music
+      SPOTIBOYS_SERVING_BUNDLE_PATH: /app/fixtures/serving_bundle/Real_service/demo-fixture-v1
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
+      REDIS_URL: redis://redis:6379/0
+      SPOTIBOYS_FIXTURE_PATH: /app/fixtures/demo_catalog.json
+      NAVIDROME_BASE_URL: http://navidrome:4533
+    volumes:
+      - spotiboys-fixture-music:/music:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      navidrome:
+        condition: service_started
+
+  event-api:
+    build:
+      context: .
+      dockerfile: apps/event-api/Dockerfile
+    environment:
+      SPOTIBOYS_RUNTIME_MODE: postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
+      REDIS_URL: redis://redis:6379/0
+      SPOTIBOYS_FIXTURE_PATH: /app/fixtures/demo_catalog.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  catalog-sync-worker:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "workers/catalog-sync-worker/sync_catalog.py"]
+    environment:
+      SPOTIBOYS_RUNTIME_MODE: postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
+      REDIS_URL: redis://redis:6379/0
+      SPOTIBOYS_FIXTURE_PATH: /app/fixtures/demo_catalog.json
+    depends_on:
+      postgres:
+        condition: service_healthy
+      navidrome:
+        condition: service_started
+
+  outcome-deriver-worker:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "workers/outcome-deriver-worker/derive_outcomes.py"]
+    profiles: ["jobs"]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend-web:
+    build:
+      context: .
+      dockerfile: apps/frontend-web/Dockerfile
+    depends_on:
+      - recommendation-api
+      - event-api
+
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "5173:80"
+    volumes:
+      - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - recommendation-api
+      - event-api
+      - frontend-web
+
+volumes:
+  spotiboys-postgres:
+  spotiboys-navidrome-data:
+  spotiboys-fixture-music:

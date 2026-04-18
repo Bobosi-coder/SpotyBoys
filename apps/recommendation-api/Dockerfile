@@ -3,6 +3,8 @@ FROM python:3.10-slim
 WORKDIR /app
 COPY packages/ /app/packages/
 COPY fixtures/ /app/fixtures/
+COPY infra/ /app/infra/
+COPY workers/ /app/workers/
 COPY apps/recommendation-api/ /app/apps/recommendation-api/
 
 RUN pip install --no-cache-dir fastapi==0.92.0 uvicorn==0.20.0 pydantic==1.10.13 psycopg2-binary==2.9.9 redis==5.0.1

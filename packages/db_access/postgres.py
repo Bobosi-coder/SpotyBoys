@@ -70,10 +70,12 @@ class PostgresRepository:
                     cur.execute(
                         """
                         INSERT INTO app.navidrome_track_mapping
-                            (track_id, navidrome_track_id, quarantine_reason, last_seen_in_navidrome_at)
-                        VALUES (%s, %s, %s, CASE WHEN %s IS NULL THEN NULL ELSE NOW() END)
+                            (track_id, navidrome_track_id, mapping_confidence, availability_status, quarantine_reason, last_seen_in_navidrome_at)
+                        VALUES (%s, %s, %s, %s, %s, CASE WHEN %s IS NULL THEN NULL ELSE NOW() END)
                         ON CONFLICT (track_id) DO UPDATE SET
                             navidrome_track_id = EXCLUDED.navidrome_track_id,
+                            mapping_confidence = EXCLUDED.mapping_confidence,
+                            availability_status = EXCLUDED.availability_status,
                             quarantine_reason = EXCLUDED.quarantine_reason,
                             last_seen_in_navidrome_at = EXCLUDED.last_seen_in_navidrome_at,
                             updated_at = NOW()
@@ -81,6 +83,8 @@ class PostgresRepository:
                         (
                             str(row["track_id"]),
                             row.get("navidrome_track_id"),
+                            float(row.get("mapping_confidence", 1.0)),
+                            str(row.get("availability_status", "available")),
                             row.get("quarantine_reason"),
                             row.get("navidrome_track_id"),
                         ),
@@ -98,6 +102,7 @@ class PostgresRepository:
                     JOIN app.navidrome_track_mapping m ON m.track_id = t.track_id
                     WHERE t.is_playable = TRUE
                       AND t.availability_status = 'available'
+                      AND m.availability_status = 'available'
                       AND m.navidrome_track_id IS NOT NULL
                       AND m.quarantine_reason IS NULL
                     ORDER BY t.track_id
@@ -131,6 +136,68 @@ class PostgresRepository:
         if track.availability_status != "available" or track.quarantine_reason:
             return None
         return track
+
+    def register_active_model_version(self, model_version: str, serving_bundle_version: str, manifest_uri: str) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE app.model_versions SET is_active = FALSE WHERE is_active = TRUE")
+                cur.execute(
+                    """
+                    INSERT INTO app.model_versions
+                        (model_version, serving_bundle_version, manifest_uri, activated_at, is_active)
+                    VALUES (%s, %s, %s, NOW(), TRUE)
+                    ON CONFLICT (model_version) DO UPDATE SET
+                        serving_bundle_version = EXCLUDED.serving_bundle_version,
+                        manifest_uri = EXCLUDED.manifest_uri,
+                        activated_at = NOW(),
+                        is_active = TRUE
+                    """,
+                    (model_version, serving_bundle_version, manifest_uri),
+                )
+
+    def upsert_playable_mapping(
+        self,
+        track_id: str,
+        navidrome_track_id: str,
+        *,
+        mapping_confidence: float = 1.0,
+        availability_status: str = "available",
+        quarantine_reason: Optional[str] = None,
+    ) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE app.playable_tracks
+                    SET is_playable = %s,
+                        availability_status = %s,
+                        updated_at = NOW()
+                    WHERE track_id = %s
+                    """,
+                    (availability_status == "available" and quarantine_reason is None, availability_status, track_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO app.navidrome_track_mapping
+                        (track_id, navidrome_track_id, mapping_confidence, availability_status, quarantine_reason, last_seen_in_navidrome_at)
+                    VALUES (%s, %s, %s, %s, %s, CASE WHEN %s = 'available' THEN NOW() ELSE NULL END)
+                    ON CONFLICT (track_id) DO UPDATE SET
+                        navidrome_track_id = EXCLUDED.navidrome_track_id,
+                        mapping_confidence = EXCLUDED.mapping_confidence,
+                        availability_status = EXCLUDED.availability_status,
+                        quarantine_reason = EXCLUDED.quarantine_reason,
+                        last_seen_in_navidrome_at = EXCLUDED.last_seen_in_navidrome_at,
+                        updated_at = NOW()
+                    """,
+                    (
+                        track_id,
+                        navidrome_track_id,
+                        mapping_confidence,
+                        availability_status,
+                        quarantine_reason,
+                        availability_status,
+                    ),
+                )
 
     def persist_recommendation_impression(self, impression_id: str, payload: Dict[str, Any]) -> bool:
         data = to_jsonable(payload)

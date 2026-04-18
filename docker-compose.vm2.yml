@@ -1,0 +1,37 @@
+services:
+  object-storage:
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: spotiboys
+      MINIO_ROOT_PASSWORD: spotiboys123
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - spotiboys-object-storage:/data
+
+  mlflow:
+    image: python:3.10-slim
+    command: ["sh", "-c", "pip install --no-cache-dir mlflow==3.0.1 >/tmp/mlflow-install.log 2>&1 && mlflow server --host 0.0.0.0 --port 5000 --backend-store-uri sqlite:////mlflow/mlflow.db --default-artifact-root /mlflow/artifacts"]
+    ports:
+      - "5000:5000"
+    volumes:
+      - spotiboys-mlflow:/mlflow
+
+  retraining-runner:
+    image: python:3.10-slim
+    command: ["sh", "-c", "echo VM2 retraining runner scaffold: reads object storage only && sleep infinity"]
+    depends_on:
+      - object-storage
+      - mlflow
+
+  promotion-gate:
+    image: python:3.10-slim
+    command: ["sh", "-c", "echo VM2 promotion gate scaffold: writes manifest-confirmed Real_service bundles && sleep infinity"]
+    depends_on:
+      - object-storage
+
+volumes:
+  spotiboys-object-storage:
+  spotiboys-mlflow:

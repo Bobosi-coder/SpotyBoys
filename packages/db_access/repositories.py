@@ -98,3 +98,31 @@ class DemoRepository:
 
     def seed_demo_state(self, user_id: str, session_id: str) -> None:
         return None
+
+    def register_active_model_version(self, model_version: str, serving_bundle_version: str, manifest_uri: str) -> None:
+        return None
+
+    def upsert_playable_mapping(
+        self,
+        track_id: str,
+        navidrome_track_id: str,
+        *,
+        mapping_confidence: float = 1.0,
+        availability_status: str = "available",
+        quarantine_reason: Optional[str] = None,
+    ) -> None:
+        track = self._tracks.get(track_id)
+        if not track:
+            return
+        self._tracks[track_id] = PlayableTrackRecord(
+            track_id=track.track_id,
+            title=track.title,
+            artist=track.artist,
+            album=track.album,
+            duration_sec=track.duration_sec,
+            cover_art_url=track.cover_art_url,
+            is_playable=availability_status == "available" and quarantine_reason is None,
+            navidrome_track_id=navidrome_track_id,
+            availability_status=availability_status,
+            quarantine_reason=quarantine_reason,
+        )

@@ -1,0 +1,5 @@
+{
+  "model_type": "fixture-gru-ranker",
+  "feature_schema_version": "demo-fixture-v1",
+  "notes": "Tiny local artifact used to exercise the VM1 serving bundle loader."
+}

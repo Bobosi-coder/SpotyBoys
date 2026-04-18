@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS app.navidrome_track_mapping (
     library_id TEXT,
     path_hash TEXT,
     mapping_confidence REAL,
+    availability_status TEXT NOT NULL DEFAULT 'unknown',
     quarantine_reason TEXT,
     last_seen_in_navidrome_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
