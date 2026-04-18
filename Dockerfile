@@ -29,3 +29,4 @@ RUN mkdir -p \
     /tmp/delta
 
 ENV PYTHONWARNINGS="ignore:Unverified HTTPS request"
+ENV PYTHONPATH=/app
