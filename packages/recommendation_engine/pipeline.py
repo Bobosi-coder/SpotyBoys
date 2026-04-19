@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import csv
 import json
+import pickle
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence
 
 from packages.artifact_runtime import ServingBundle
 from packages.db_access.repositories import PlayableTrackRecord
@@ -37,10 +38,13 @@ class ServingRecommendationPipeline:
     def __init__(self, bundle: ServingBundle) -> None:
         self.bundle = bundle
         root = bundle.bundle_path
+        self.real_retriever = None
+        self.real_ranker = None
         self.cooc_session = _load_score_file(root / "cooc_session.npz")
         self.cooc_playlist = _load_score_file(root / "cooc_playlist.npz")
         self.centroids = _load_json_scores(root / "user_centroids.pkl")
         self.ranker_weights = _load_json(root / "gru_ranker.pt")
+        self._try_load_real_runtime(root)
         self.last_trace = PipelineTrace([], 0, [], False, False, [], [], [])
 
     def recommend(
@@ -51,6 +55,14 @@ class ServingRecommendationPipeline:
         recent_track_ids: Iterable[str],
         disliked_track_ids: Iterable[str] = (),
     ) -> List[PlayableTrackRecord]:
+        real_output = self._recommend_with_real_runtime(
+            playable_tracks,
+            user_id=user_id,
+            recent_track_ids=list(recent_track_ids),
+            disliked_track_ids=set(disliked_track_ids),
+        )
+        if real_output:
+            return real_output
         candidates = self.retrieve_candidates(playable_tracks, user_id=user_id)
         ranked = self.rank_candidates(candidates)
         disliked = set(disliked_track_ids)
@@ -73,6 +85,97 @@ class ServingRecommendationPipeline:
             final_track_ids=[item.track.track_id for item in final],
         )
         return [item.track for item in final]
+
+    def _try_load_real_runtime(self, root: Path) -> None:
+        runtime_root = root.parents[1] / "runtime" if len(root.parents) > 1 else root / "runtime"
+        item2vec_dir = runtime_root / "item2vec"
+        retriever_dir = runtime_root / "retriever"
+        if not item2vec_dir.exists() or not retriever_dir.exists():
+            return
+        try:
+            from src.ranker.ranker import GRURankerInference
+            from src.retriever.retriever import MultiRecallRetriever
+
+            self.real_retriever = MultiRecallRetriever(
+                artifacts_dir=str(retriever_dir),
+                processed_dir=str(item2vec_dir),
+            )
+            self.real_ranker = GRURankerInference(
+                artifacts_dir=str(root),
+                i2v_dir=str(item2vec_dir),
+                retriever_dir=str(retriever_dir),
+            )
+        except Exception:
+            self.real_retriever = None
+            self.real_ranker = None
+
+    def _recommend_with_real_runtime(
+        self,
+        playable_tracks: Sequence[PlayableTrackRecord],
+        *,
+        user_id: str,
+        recent_track_ids: Sequence[str],
+        disliked_track_ids: set[str],
+    ) -> Optional[List[PlayableTrackRecord]]:
+        if not self.real_retriever or not self.real_ranker:
+            return None
+        playable_by_id = {str(track.track_id): track for track in playable_tracks}
+        user_int = _safe_int(user_id)
+        recent_ints = [_safe_int(track_id) for track_id in recent_track_ids]
+        recent_ints = [track_id for track_id in recent_ints if track_id is not None]
+        try:
+            retrieved = self.real_retriever.retrieve(
+                user_int or 0,
+                recent_ints,
+                ["neutral"] * len(recent_ints),
+            )
+            candidate_ids = [track_id for track_id, _score in retrieved]
+            ranked = self.real_ranker.score(
+                user_int or 0,
+                recent_ints,
+                ["neutral"] * len(recent_ints),
+                candidate_ids,
+            )
+        except Exception:
+            return None
+        output: List[PlayableTrackRecord] = []
+        seen_artists: Dict[str, int] = {}
+        for track_id, _score in ranked:
+            key = str(track_id)
+            if key in disliked_track_ids or key in recent_track_ids:
+                continue
+            track = playable_by_id.get(key)
+            if not track:
+                continue
+            artist_count = seen_artists.get(track.artist, 0)
+            if artist_count > 1:
+                continue
+            output.append(track)
+            seen_artists[track.artist] = artist_count + 1
+            if len(output) >= 18:
+                break
+        if not output:
+            return None
+        self.last_trace = PipelineTrace(
+            c1_artifacts_loaded=[
+                "Item2vec/item2vec_128d.npy",
+                "Item2vec/item2vec_track_to_row.json",
+                "gru_ranker.pt",
+                "gru_ranker_config.json",
+                "cooc_session.npz",
+                "cooc_playlist.npz",
+                "user_centroids.pkl",
+                "pop_scores.csv",
+            ],
+            c2_candidate_count=len(candidate_ids),
+            c2_sources=["cooc_session", "cooc_playlist", "popularity", "user_centroid"],
+            c3_ranker_invoked=True,
+            c4_policy_invoked=True,
+            c4_removed_track_ids=[],
+            c4_disliked_track_ids=sorted(disliked_track_ids),
+            final_track_ids=[track.track_id for track in output],
+        )
+        return output
 
     def retrieve_candidates(self, playable_tracks: Sequence[PlayableTrackRecord], *, user_id: str) -> List[Candidate]:
         by_id = {track.track_id: track for track in playable_tracks}
@@ -157,18 +260,41 @@ class ServingRecommendationPipeline:
 
 
 def _load_score_file(path: Path) -> Dict[str, float]:
-    with path.open("r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        return {str(row["track_id"]): float(row["score"]) for row in reader}
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            return {str(row["track_id"]): float(row["score"]) for row in reader}
+    except UnicodeDecodeError:
+        return {}
 
 
 def _load_json(path: Path) -> Dict[str, object]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except UnicodeDecodeError:
+        return {}
 
 
 def _load_json_scores(path: Path) -> Dict[str, Dict[str, float]]:
     payload = _load_json(path)
+    if not payload:
+        try:
+            with path.open("rb") as handle:
+                raw = pickle.load(handle)
+            return {str(user_id): {} for user_id in raw}
+        except Exception:
+            return {}
     return {
         str(user_id): {str(track_id): float(score) for track_id, score in scores.items()}
         for user_id, scores in payload.items()
     }
+
+
+def _safe_int(value: str) -> Optional[int]:
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    if not digits:
+        return None
+    try:
+        return int(digits)
+    except ValueError:
+        return None

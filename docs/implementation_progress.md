@@ -145,3 +145,57 @@
 1. Replace the lightweight fixture GRU ranker with the production tensor GRU inference implementation.
 2. Add durable dislike/exploration policy inputs to C4.
 3. Add real parquet dependencies to the service image for parser export.
+
+## 2026-04-19 Remote Artifact Integration Update
+
+Completed:
+- Pulled `src/` from `origin/feature/gpu-docker-training` into `serving_requirements` so the branch uses the latest retriever/ranker code:
+  - C2 `src/retriever/retriever.py` (`MultiRecallRetriever`)
+  - C3 `src/ranker/ranker.py` (`GRURankerInference`)
+  - C3 model definition `src/ranker/model.py`
+- Added `workers/artifact-fetch-worker/fetch_remote_artifacts.py`.
+- Added Docker Compose `artifact-fetch-worker` wiring with Chameleon/S3-compatible environment variables.
+- Updated the recommendation API image to include `src/`, `boto3`, `numpy`, `pandas`, `scipy`, and CPU-only `torch`.
+- Downloaded and staged the latest remote serving bundle:
+  - `Real_service/20260419_203835`
+  - `Item2vec/`
+- Normalized the staged active serving manifest to include the VM1 serving contract fields `artifacts` and `model_version`.
+- Mounted the staged active serving bundle at `/serving-bundle/Real_service/active`.
+- Wired the recommendation service to attempt the real C2/C3 runtime first, then fall back to local playable fixtures if the trained numeric 30Music IDs do not overlap with the local tiny fixture catalog.
+- Rebuilt and restarted the full Compose demo stack.
+
+Commands run:
+- `git checkout origin/feature/gpu-docker-training -- src`
+- `docker compose build artifact-fetch-worker`
+- `docker compose run --rm artifact-fetch-worker`
+- `bash infra/scripts/demo_up.sh compose`
+- `bash infra/scripts/healthcheck_demo.sh`
+- `python3 -m compileall packages apps infra/scripts workers jobs src tests`
+- `python3 -m unittest discover -s tests -v`
+
+Tests and validation:
+- `python3 -m unittest discover -s tests -v`: 17 tests passed.
+- `python3 -m compileall packages apps infra/scripts workers jobs src tests`: passed.
+- `bash infra/scripts/healthcheck_demo.sh`: passed through nginx with:
+  - proxy health 200
+  - recommendation health 200
+  - recommendation readiness 200
+  - event health 200
+  - auth signup/session cookie
+  - playable-track 200
+  - mapped stream 200
+  - real fixture audio verification
+  - unmapped stream 404
+  - recommendation caps/defaults
+  - recommendation next
+  - impression/playback/feedback idempotency
+
+Current demo state:
+- Running URL: `http://127.0.0.1:5173/`
+- Active staged serving version: `20260419_203835`
+- Local fixture mode still uses tiny local playable tracks, so real trained C2/C3 candidates are filtered against the local playable catalog. On VM1, the canonical playable catalog must use the same track ID namespace as the trained artifacts for the real model output to surface directly.
+
+Remaining:
+- Verify VM1 real-library catalog reconciliation maps canonical playable tracks to the numeric trained 30Music IDs.
+- Add a visible diagnostics endpoint for pipeline runtime mode and last C1/C2/C3/C4 trace.
+- Keep `.env` local-only; do not commit object-store credentials.

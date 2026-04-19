@@ -66,7 +66,7 @@ services:
       SPOTIBOYS_RUNTIME_MODE: postgres
       SPOTIBOYS_MEDIA_MODE: navidrome_fixture
       SPOTIBOYS_MUSIC_ROOT: /music
-      SPOTIBOYS_SERVING_BUNDLE_PATH: /app/fixtures/serving_bundle/Real_service/demo-fixture-v1
+      SPOTIBOYS_SERVING_BUNDLE_PATH: /serving-bundle/Real_service/active
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
       REDIS_URL: redis://redis:6379/0
       SPOTIBOYS_FIXTURE_PATH: /app/fixtures/demo_catalog.json
@@ -75,6 +75,7 @@ services:
       NAVIDROME_PASSWORD: spotiboys
     volumes:
       - spotiboys-fixture-music:/music:ro
+      - spotiboys-serving-bundle:/serving-bundle:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -83,6 +84,8 @@ services:
       navidrome:
         condition: service_started
       catalog-sync-worker:
+        condition: service_completed_successfully
+      artifact-fetch-worker:
         condition: service_completed_successfully
 
   event-api:
@@ -160,6 +163,24 @@ services:
     volumes:
       - spotiboys-object-storage:/object-storage
 
+  artifact-fetch-worker:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "workers/artifact-fetch-worker/fetch_remote_artifacts.py"]
+    environment:
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-https://chi.tacc.chameleoncloud.org:7480}
+      S3_ENDPOINT: ${S3_ENDPOINT:-https://chi.tacc.chameleoncloud.org:7480}
+      S3_NO_VERIFY_SSL: ${S3_NO_VERIFY_SSL:-true}
+      ARTIFACT_BUCKET: ${ARTIFACT_BUCKET:-proj23-mlflow-artifacts}
+      SPOTIBOYS_OBJECT_STORAGE_ROOT: /object-storage
+      SPOTIBOYS_ACTIVE_ARTIFACT_ROOT: /serving-bundle
+    volumes:
+      - spotiboys-object-storage:/object-storage
+      - spotiboys-serving-bundle:/serving-bundle
+
   frontend-web:
     build:
       context: .
@@ -184,3 +205,4 @@ volumes:
   spotiboys-navidrome-data:
   spotiboys-fixture-music:
   spotiboys-object-storage:
+  spotiboys-serving-bundle:

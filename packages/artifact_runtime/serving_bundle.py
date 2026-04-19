@@ -40,10 +40,12 @@ def _load_pop_scores(path: Path) -> Dict[str, float]:
     scores: Dict[str, float] = {}
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
-        if "track_id" not in (reader.fieldnames or []) or "score" not in (reader.fieldnames or []):
-            raise ValueError("pop_scores.csv must contain track_id and score columns")
+        fieldnames = reader.fieldnames or []
+        score_column = "score" if "score" in fieldnames else "pop_score" if "pop_score" in fieldnames else ""
+        if "track_id" not in fieldnames or not score_column:
+            raise ValueError("pop_scores.csv must contain track_id and score/pop_score columns")
         for row in reader:
-            scores[str(row["track_id"])] = float(row["score"])
+            scores[str(row["track_id"])] = float(row[score_column])
     if not scores:
         raise ValueError("pop_scores.csv must contain at least one scored track")
     return scores

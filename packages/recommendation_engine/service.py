@@ -139,12 +139,15 @@ class RecommendationService:
         user_id: str = "",
     ) -> List[PlayableTrackRecord]:
         if self.pipeline:
-            return self.pipeline.recommend(
+            ranked = self.pipeline.recommend(
                 playable,
                 user_id=user_id or "user_demo",
                 recent_track_ids=self.runtime_state.recent_track_ids(session_id) if session_id else [],
                 disliked_track_ids=self.repository.list_disliked_track_ids(user_id) if user_id else [],
             )
+            if ranked:
+                return ranked
+            return playable
         if not self.serving_bundle:
             return playable
         track_by_id: Dict[str, PlayableTrackRecord] = {track.track_id: track for track in playable}
