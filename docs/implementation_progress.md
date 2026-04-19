@@ -199,3 +199,35 @@ Remaining:
 - Verify VM1 real-library catalog reconciliation maps canonical playable tracks to the numeric trained 30Music IDs.
 - Add a visible diagnostics endpoint for pipeline runtime mode and last C1/C2/C3/C4 trace.
 - Keep `.env` local-only; do not commit object-store credentials.
+
+## Serving-Focused Cleanup
+
+Completed:
+- Removed obsolete tracked experiment stacks and presentation-only files:
+  - root legacy serving Dockerfiles
+  - old `serving/` ONNX/Ray/Triton benchmark stack
+  - old `scripts/` release/mock/demo helpers superseded by `infra/scripts/`
+  - data-team presentation docs under `doc/`
+  - notebook and model repository leftovers not used by VM1 serving
+  - temporary report/source dump files
+- Replaced the old Item2Vec workspace README with a serving-only README.
+- Kept the active serving/runtime surface:
+  - `apps/`
+  - `packages/`
+  - `db/`
+  - `infra/nginx/`
+  - `infra/scripts/`
+  - `workers/`
+  - `jobs/`
+  - `fixtures/`
+  - `src/ranker/`
+  - `src/retriever/`
+  - `tests/`
+  - deployment/runbook docs
+- Removed generated `__pycache__` folders and ignored local runtime leftovers.
+
+Verification:
+- `python3 -m unittest discover -s tests -v`: 17 tests passed.
+- `python3 -m compileall packages apps infra/scripts workers jobs src tests`: passed.
+- `docker compose -f docker-compose.yml config`: passed.
+- `COMPOSE_PROJECT_NAME=spotiboys_vm1_demo SPOTIBOYS_FRONTEND_PORT=8089 SPOTIBOYS_VM_MUSIC_ROOT=/mnt/mlflow_persist_large/music docker compose -f docker-compose.yml -f docker-compose.vm-library.yml config`: passed.

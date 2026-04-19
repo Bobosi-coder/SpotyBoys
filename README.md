@@ -1,151 +1,149 @@
-# SpotyBoys Item2Vec Workspace
+# SpotyBoys Serving Stack
 
-This branch is based on `feature/item2vec-embedding` and keeps the local database bootstrap files from the cleanup work.
+SpotyBoys is the VM1 serving application for the Option B music recommendation architecture.
 
-## Quick Start
+This repository now keeps only the code needed to run, validate, and hand off the serving path:
 
-```bash
-bash scripts/install_awscli.sh
-bash setup.sh
-source scripts/aws_env.sh
-```
+- first-party frontend
+- recommendation API
+- event API
+- PostgreSQL durable truth
+- Redis hot/session state
+- internal Navidrome media backend
+- same-origin stream proxy
+- catalog sync worker
+- serving artifact fetch/refresh workers
+- parser export and VM2 handoff scaffolds
+- shared contracts and tests
 
-This is the recommended flow on a fresh Chameleon VM.
-
-`setup.sh`:
-
-- installs `uv` if needed and runs `uv sync`
-- creates `.env` from `.env.example` on first run
-- installs and starts PostgreSQL on apt-based systems when `psql` is missing
-- initializes the local `spotiboys` schema from `db/001_init.sql`
-
-AWS/object-storage responsibilities are intentionally separate:
-
-- `bash scripts/install_awscli.sh`
-  Installs AWS CLI into a dedicated venv for the current VM.
-- `source scripts/aws_env.sh`
-  Loads object-storage credentials and activates the AWS CLI environment.
-- `bash scripts/download_remote_assets.sh`
-  Downloads parsed CSV data from object storage when needed.
-
-## Common Toggles
+## Local Demo
 
 ```bash
-INSTALL_POSTGRES=false INIT_DB=false bash setup.sh
-RUN_INDEXES=true bash setup.sh
+cp .env.example .env
+
+export COMPOSE_PROJECT_NAME=spotiboys_local_demo
+export SPOTIBOYS_FRONTEND_PORT=5173
+
+docker compose -f docker-compose.yml up --build -d
+BASE_URL=http://127.0.0.1:5173 bash infra/scripts/healthcheck_demo.sh
 ```
 
-## Re-run DB Init Only
+Open:
+
+```text
+http://127.0.0.1:5173/
+```
+
+## VM Demo
+
+The VM demo uses frontend port `8089` and reads songs from:
+
+```text
+/mnt/mlflow_persist_large/music/
+```
+
+Use the VM runbook:
+
+```text
+docs/vm_docker_demo_setup.md
+```
+
+Short form:
 
 ```bash
-bash scripts/init_db.sh
+git fetch origin
+git checkout serving_requirements
+git pull origin serving_requirements
+
+cp .env.example .env
+# Fill object-storage credentials in .env.
+
+export COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
+export SPOTIBOYS_FRONTEND_PORT=8089
+export SPOTIBOYS_VM_MUSIC_ROOT=/mnt/mlflow_persist_large/music
+
+docker compose -f docker-compose.yml -f docker-compose.vm-library.yml up --build -d
+BASE_URL=http://127.0.0.1:8089 bash infra/scripts/healthcheck_demo.sh
 ```
 
-## Object Storage Workflow
+Open:
 
-Recommended order on a fresh VM:
+```text
+http://<VM_PUBLIC_IP_OR_HOSTNAME>:8089/
+```
+
+## Current Serving Path
+
+```text
+browser
+  -> nginx same-origin ingress
+  -> frontend-web
+  -> recommendation-api / event-api
+  -> PostgreSQL + Redis
+  -> internal Navidrome
+  -> VM music mount or local fixture music
+```
+
+The browser never receives raw Navidrome credentials or internal Navidrome URLs.
+
+Playback goes through:
+
+```text
+GET /stream/<track_id>
+```
+
+## Model Artifacts
+
+Object storage is used for model artifacts, not song files.
+
+The artifact fetch worker downloads:
+
+- `Real_service/<version>/`
+- `Item2vec/`
+
+and stages the active serving bundle under:
+
+```text
+/serving-bundle/Real_service/active
+/serving-bundle/runtime
+```
+
+The active online serving stages are:
+
+- C1: offline Item2Vec artifacts consumed at serving time
+- C2: online candidate retrieval from co-occurrence, user centroids, and popularity artifacts
+- C3: online GRU ranker inference
+- C4: policy reranking and playable-only filtering
+
+## Important Directories
+
+```text
+apps/frontend-web/              frontend product surface
+apps/recommendation-api/         session, recommendations, playable-track, stream, auth
+apps/event-api/                  impression, playback, feedback ingestion
+packages/                        shared contracts, config, DB access, runtime state, recommendation engine
+db/                              PostgreSQL schema and indexes
+infra/nginx/                     same-origin reverse proxy config
+infra/scripts/                   demo, healthcheck, validation, fixture-media helpers
+workers/                         catalog sync, artifact fetch/refresh, parser export, outcome derivation
+jobs/                            VM2 retraining/promotion placeholders
+fixtures/                        tiny local fixture catalog and test serving bundle
+src/ranker/                      latest GRU ranker training/inference code
+src/retriever/                   latest C2 retrieval code
+tests/                           backend/frontend contract tests
+docs/                            implementation and VM setup runbooks
+```
+
+## Verification
 
 ```bash
-bash scripts/install_awscli.sh
-bash setup.sh
-source scripts/aws_env.sh
+python3 -m unittest discover -s tests -v
+python3 -m compileall packages apps infra/scripts workers jobs src tests
+docker compose -f docker-compose.yml config
 ```
 
-Download parsed raw CSVs only when needed:
+For a running stack:
 
 ```bash
-bash scripts/download_remote_assets.sh
+BASE_URL=http://127.0.0.1:${SPOTIBOYS_FRONTEND_PORT:-5173} bash infra/scripts/healthcheck_demo.sh
 ```
-
-You can also pass a custom remote prefix and local destination:
-
-```bash
-bash scripts/download_remote_assets.sh data/raw/content/30music_parsed/ ./data/raw/content/30music_parsed
-```
-
-## Release Workflows
-
-Versioned data releases for the initial implementation:
-
-```bash
-bash scripts/run_item2vec_release.sh
-bash scripts/run_retriever_release.sh
-bash scripts/run_ranker_release.sh
-```
-
-Published object-storage prefixes:
-
-- `processed/item2vec/{dataset_version}/`
-- `features/retriever/{feature_version}/`
-- `datasets/ranker/{ranker_version}/`
-- `manifests/releases/...`
-
-## Generator Workflow
-
-Production-like request generation from `ranker_val.parquet`:
-
-```bash
-bash scripts/run_ranker_seed_generator.sh --max-requests 25 --top-k 5
-```
-
-The generator:
-
-- reads only a small seed pool from `ranker_val.parquet` by default for fast demos
-- samples realistic session contexts from `ranker_val.parquet`
-- builds hypothetical `/recommend`, `/impression`, and `/outcome` payloads
-- optionally POSTs them when `RECOMMEND_URL`, `IMPRESSION_URL`, and `OUTCOME_URL` are set
-- always writes JSONL logs under `artifacts/generator/<run_name>/`
-
-Minimum endpoint-backed demo flow:
-
-```bash
-bash scripts/run_mock_recommendation_server.sh
-RECOMMEND_URL=http://localhost:8001/recommend \
-IMPRESSION_URL=http://localhost:8001/impression \
-OUTCOME_URL=http://localhost:8001/outcome \
-bash scripts/run_ranker_seed_generator.sh --max-requests 25 --top-k 5
-```
-
-The mock service:
-
-- exposes `POST /recommend`, `POST /impression`, and `POST /outcome`
-- defaults to a lightweight seed-only mode so it stays up reliably on small VMs
-- can optionally enable retriever/ranker loading via `MOCK_ENABLE_RETRIEVER=true` and `MOCK_ENABLE_RANKER=true`
-- writes endpoint-side JSONL logs under `artifacts/mock_service/`
-
-## Online Feature Demo
-
-Separate minimal artifact for the online-feature requirement:
-
-```bash
-bash scripts/run_mock_recommendation_server.sh
-bash scripts/run_online_feature_demo.sh
-```
-
-The online feature demo:
-
-- reuses a realistic request from the latest `artifacts/generator/*/recommend_requests.jsonl` when available
-- falls back to a built-in sample request if no generator log exists
-- calls `POST /recommend`
-- writes `request.json`, `response.json`, `feature_summary.json`, and `demo_summary.json` under `artifacts/online_feature_demo/<run_name>/`
-- surfaces a compact `online_features` summary for a single end-to-end inference example
-
-## Presentation Docs
-
-Recommended docs for the current presentation scope:
-
-- `doc/data_team_initial_implement_plan.md`
-- `doc/data_team_presentation_runbook.md`
-- `doc/generator_demo_script_draft.md`
-- `doc/online_feature_pipeline_report_draft.md`
-
-Current presentation scope intentionally excludes the production-log-based batch dataset compiler.
-
-## Project Notes
-
-- Item2Vec code lives under `src/item2vec/`
-- Retriever code lives under `src/retriever/`
-- Ranker code lives under `src/ranker/`
-- Data release helpers live under `src/data_release/`
-- Data preprocessing notes live in `data_preprocess_pipeline.md`
-- Item2Vec pipeline notes live in `item2vec_pipeline.md`

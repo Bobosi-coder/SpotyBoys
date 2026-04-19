@@ -192,7 +192,7 @@ services:
   nginx:
     image: nginx:1.25-alpine
     ports:
-      - "5173:80"
+      - "${SPOTIBOYS_FRONTEND_PORT:-5173}:80"
     volumes:
       - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:

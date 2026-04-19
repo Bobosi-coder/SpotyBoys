@@ -41,6 +41,7 @@ docs/*
 !docs/iteration3_execution_plan.md
 !docs/iteration3_validation_runbook.md
 !docs/iteration3_model_stack_verification.md
+!docs/vm_docker_demo_setup.md
 *.tar
 *.pth
 !fixtures/serving_bundle/**/*.pt
