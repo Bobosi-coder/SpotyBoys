@@ -185,29 +185,30 @@ def train(args: argparse.Namespace, report_callback=None, bpr_weight: float = 0.
     os.makedirs(OUT_DIR, exist_ok=True)
     mlflow.set_experiment(args.mlflow_experiment)
 
-    with mlflow.start_run(run_name=args.run_name):
-        mlflow.log_params({
-            "epochs":        args.epochs,
-            "batch_size":    args.batch_size,
-            "lr":            args.lr,
-            "weight_decay":  args.weight_decay,
-            "max_norm":      args.max_norm,
-            "bpr_weight":    bpr_weight,
-            "device":        str(device),
-            "d_emb":         D_EMB,
-            "n_labels":      N_LABELS,
-            "n_layers":      args.n_layers,
-            "dropout":       args.dropout,
-            "L":             L_PREFIX,
-            "train_contexts": len(train_ds),
-            "val_contexts":   len(val_ds),
-        })
+    mlflow.start_run(run_name=args.run_name)
+    mlflow.log_params({
+        "epochs":        args.epochs,
+        "batch_size":    args.batch_size,
+        "lr":            args.lr,
+        "weight_decay":  args.weight_decay,
+        "max_norm":      args.max_norm,
+        "bpr_weight":    bpr_weight,
+        "device":        str(device),
+        "d_emb":         D_EMB,
+        "n_labels":      N_LABELS,
+        "n_layers":      args.n_layers,
+        "dropout":       args.dropout,
+        "L":             L_PREFIX,
+        "train_contexts": len(train_ds),
+        "val_contexts":   len(val_ds),
+    })
 
-        best_ndcg  = -1.0
-        ckpt_path  = os.path.join(OUT_DIR, "gru_ranker.pt")
-        cfg_path   = os.path.join(OUT_DIR, "gru_ranker_config.json")
-        t_train_start = time.time()
+    best_ndcg  = -1.0
+    ckpt_path  = os.path.join(OUT_DIR, "gru_ranker.pt")
+    cfg_path   = os.path.join(OUT_DIR, "gru_ranker_config.json")
+    t_train_start = time.time()
 
+    try:
         for epoch in range(1, args.epochs + 1):
             t_ep = time.time()
             model.train()
@@ -265,16 +266,8 @@ def train(args: argparse.Namespace, report_callback=None, bpr_weight: float = 0.
                 "peak_vram_mb": peak_vram_mb,
             }, step=epoch)
 
-            if report_callback is not None:
-                report_callback({
-                    "val_ndcg5":  val_m["NDCG@5"],
-                    "val_hr5":    val_m["HR@5"],
-                    "val_mrr5":   val_m["MRR@5"],
-                    "val_loss":   val_m["val_loss"],
-                    "train_loss": train_loss,
-                })
-
-            # Checkpoint on NDCG@5 improvement
+            # Checkpoint on NDCG@5 improvement — log artifacts immediately
+            # so they are saved even when ASHA stops this trial after this epoch
             if val_m["NDCG@5"] > best_ndcg:
                 best_ndcg = val_m["NDCG@5"]
                 torch.save(model.state_dict(), ckpt_path)
@@ -287,14 +280,26 @@ def train(args: argparse.Namespace, report_callback=None, bpr_weight: float = 0.
                 }
                 with open(cfg_path, "w") as f:
                     json.dump(config, f, indent=2)
+                mlflow.log_artifact(ckpt_path)
+                mlflow.log_artifact(cfg_path)
                 log.info(f"  ✓ Best NDCG@5={best_ndcg:.4f} — checkpoint saved")
 
-        # Log final artifacts
+            # Report to Ray Tune (ASHA may stop this trial after this call)
+            if report_callback is not None:
+                report_callback({
+                    "val_ndcg5":  val_m["NDCG@5"],
+                    "val_hr5":    val_m["HR@5"],
+                    "val_mrr5":   val_m["MRR@5"],
+                    "val_loss":   val_m["val_loss"],
+                    "train_loss": train_loss,
+                })
+
+    finally:
+        # Always end run as FINISHED — covers both normal completion and
+        # early stopping by ASHA (which raises an exception in the worker)
         total_wall_s = time.time() - t_train_start
         mlflow.log_metric("total_wall_s", total_wall_s)
-        if os.path.exists(ckpt_path):
-            mlflow.log_artifact(ckpt_path)
-            mlflow.log_artifact(cfg_path)
+        mlflow.end_run(status="FINISHED")
 
     log.info(f"Training complete. Best NDCG@5={best_ndcg:.4f}  total={total_wall_s/60:.1f}min")
 

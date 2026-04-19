@@ -77,7 +77,7 @@ if [[ "${MODE}" == "phase1" ]]; then
         2>&1 | tee logs/ranker_data_build_${VERSION}.log
 
     log "========================================================"
-    log "Phase 1 — Step 3: Ray Tune sweep"
+    log "Phase 1 — Step 3: Fixed-config training (epochs 3 and 5)"
     log "========================================================"
     python3 scripts/tune_phase1.py \
         2>&1 | tee logs/ranker_tune_${VERSION}.log

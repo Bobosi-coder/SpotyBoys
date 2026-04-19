@@ -1,65 +1,43 @@
 """
-scripts/tune_phase1.py — Ray Tune Phase 1 hyperparameter sweep
+scripts/tune_phase1.py — Phase 1 fixed-config training runs
 
-Runs trials with ASHA early stopping on a single GPU.
+Runs two sequential full training jobs with the best known hyperparameters,
+differing only in epoch count (3 and 5). Both runs are logged to MLflow
+experiment "training before online service".
 
-Search space (new, expanded):
-  batch_size:   8192 / 16384 / 32768
-  lr:           linear scaling  batch_size / 4096 * 2.4e-3
-  dropout:      0.0 / 0.1 / 0.2 / 0.3   (GRU inter-layer + MLP)
-  weight_decay: 1e-5 / 1e-4 / 5e-4
-  bpr_weight:   0.25 / 0.5 / 1.0        (BPR loss coefficient)
-  n_layers:     2   (fixed — 3 layers validated as no improvement)
-  epochs:       max 5, ASHA stops early
-
-Results logged to MLflow experiment "training before online service".
+Fixed hyperparameters:
+  batch_size:   8192
+  lr:           4.8e-3   (= 8192/4096 * 2.4e-3, linear scaling rule)
+  dropout:      0.1
+  weight_decay: 1e-4
+  bpr_weight:   0.5
+  n_layers:     2
+  max_norm:     1.0
 
 Usage:
   python3 scripts/tune_phase1.py
-  python3 scripts/tune_phase1.py --num-samples 2 --max-epochs 2   # smoke test
 """
-import argparse
 import logging
-import os
-
-import ray
-import ray.train
-from ray import tune
-from ray.tune.schedulers import ASHAScheduler
 
 from src.ranker.train import run as train_run
 
 EXPERIMENT = "training before online service"
 
+FIXED = dict(
+    batch_size   = 8192,
+    lr           = 4.8e-3,
+    dropout      = 0.1,
+    weight_decay = 1e-4,
+    bpr_weight   = 0.5,
+    n_layers     = 2,
+    max_norm     = 1.0,
+    device       = "auto",
+    experiment   = EXPERIMENT,
+)
+
+EPOCH_CONFIGS = [3, 5]
+
 log = logging.getLogger("tune_phase1")
-
-
-def train_trial(config: dict) -> None:
-    os.chdir("/app")  # Ray changes cwd per trial; reset to project root
-    lr = config["batch_size"] / 4096 * 2.4e-3
-
-    def _report(metrics: dict) -> None:
-        ray.train.report(metrics)
-
-    train_run(
-        experiment=EXPERIMENT,
-        run_name=(
-            f"tune_b{config['batch_size']}"
-            f"_d{config['dropout']}"
-            f"_wd{config['weight_decay']:.0e}"
-            f"_bpr{config['bpr_weight']}"
-        ),
-        epochs=config["max_epochs"],
-        batch_size=config["batch_size"],
-        lr=lr,
-        weight_decay=config["weight_decay"],
-        max_norm=1.0,
-        device="auto",
-        n_layers=2,
-        dropout=config["dropout"],
-        bpr_weight=config["bpr_weight"],
-        report_callback=_report,
-    )
 
 
 def main() -> None:
@@ -69,47 +47,20 @@ def main() -> None:
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    parser = argparse.ArgumentParser(description="Ray Tune Phase 1 sweep")
-    parser.add_argument("--num-samples", type=int, default=18,
-                        help="Number of Ray Tune trials")
-    parser.add_argument("--max-epochs",  type=int, default=5,
-                        help="Max epochs per trial (ASHA may stop earlier)")
-    args = parser.parse_args()
+    for epochs in EPOCH_CONFIGS:
+        run_name = f"fixed_e{epochs}_b8192_d0.1_wd1e-4_bpr0.5"
+        log.info("=" * 60)
+        log.info(f"Starting run: {run_name}  (epochs={epochs})")
+        log.info("=" * 60)
+        train_run(
+            run_name=run_name,
+            epochs=epochs,
+            **FIXED,
+        )
+        log.info(f"Run {run_name} complete.")
 
-    ray.init(num_gpus=1)
-
-    # 3 × 4 × 3 × 3 = 108 combinations; sample 18 with ASHA early stopping
-    search_space = {
-        "batch_size":   tune.choice([8192, 16384, 32768]),
-        "dropout":      tune.choice([0.0, 0.1, 0.2, 0.3]),
-        "weight_decay": tune.choice([1e-5, 1e-4, 5e-4]),
-        "bpr_weight":   tune.choice([0.25, 0.5, 1.0]),
-        "max_epochs":   args.max_epochs,
-    }
-
-    scheduler = ASHAScheduler(
-        max_t=args.max_epochs,
-        grace_period=1,
-        reduction_factor=2,
-    )
-
-    tuner = tune.Tuner(
-        tune.with_resources(train_trial, {"gpu": 1}),
-        param_space=search_space,
-        tune_config=tune.TuneConfig(
-            scheduler=scheduler,
-            num_samples=args.num_samples,
-            metric="val_ndcg5",
-            mode="max",
-        ),
-    )
-
-    results = tuner.fit()
-    best = results.get_best_result()
-    log.info(f"Best trial config:  {best.config}")
-    log.info(f"Best val_ndcg5:     {best.metrics.get('val_ndcg5')}")
-
-    ray.shutdown()
+    log.info("All Phase 1 runs finished.")
+    log.info(f"MLflow experiment: '{EXPERIMENT}'")
 
 
 if __name__ == "__main__":
