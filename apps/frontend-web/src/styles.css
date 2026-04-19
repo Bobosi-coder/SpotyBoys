@@ -64,6 +64,59 @@ button {
   padding: 34px 34px 118px;
 }
 
+.auth-panel {
+  position: absolute;
+  inset: 0 0 96px 132px;
+  z-index: 5;
+  background: rgba(255, 248, 251, 0.96);
+  display: grid;
+  place-items: center;
+  padding: 28px;
+}
+
+.auth-box {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 14px;
+}
+
+.auth-box h1,
+.auth-box p {
+  margin: 0;
+}
+
+.auth-box h1 {
+  font-size: 42px;
+}
+
+.auth-box p {
+  color: var(--muted);
+}
+
+.auth-box input {
+  width: 100%;
+  height: 48px;
+  border: 1px solid var(--line);
+  background: white;
+  color: var(--ink);
+  padding: 0 14px;
+  font: inherit;
+}
+
+.auth-error {
+  border-left: 4px solid var(--accent);
+  background: #fff0f7;
+  color: #4c2442;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+
+.auth-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
 .section-heading {
   display: flex;
   align-items: baseline;
@@ -285,6 +338,15 @@ button {
   gap: 10px;
 }
 
+.logout-button {
+  height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: rgba(255, 255, 255, 0.78);
+  padding: 0 14px;
+  cursor: pointer;
+}
+
 .dock-button {
   height: 44px;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -296,6 +358,20 @@ button {
 .dock-button.primary {
   background: var(--accent);
   border-color: var(--accent);
+}
+
+.auth-button {
+  height: 44px;
+  border: 1px solid var(--line);
+  background: white;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.auth-button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
 }
 
 @media (max-width: 760px) {
@@ -319,6 +395,10 @@ button {
 
   .content {
     padding: 24px 18px 128px;
+  }
+
+  .auth-panel {
+    inset: 64px 0 104px 0;
   }
 
   .featured-grid {

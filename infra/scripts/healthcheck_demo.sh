@@ -8,25 +8,26 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 "${PYTHON_BIN}" - "$BASE_URL" <<'PY'
 import json
+import http.cookiejar
 import sys
 import uuid
 import urllib.error
 import urllib.request
 
 base = sys.argv[1].rstrip("/")
+jar = http.cookiejar.CookieJar()
+opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+
 checks = [
     ("proxy health", f"{base}/health"),
     ("recommendation health", f"{base}/recommendation-health"),
     ("recommendation ready", f"{base}/recommendation-ready"),
     ("event health", f"{base}/event-health"),
-    ("bootstrap", f"{base}/session/bootstrap"),
-    ("playable track", f"{base}/playable-track/trk_001"),
-    ("stream mapped", f"{base}/stream/trk_001"),
 ]
 
 for label, url in checks:
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:
+        with opener.open(url, timeout=5) as response:
             status = response.status
             body = response.read(80)
     except Exception as exc:
@@ -37,7 +38,34 @@ for label, url in checks:
         raise SystemExit(1)
     print(f"OK {label}: HTTP {status}")
 
-with urllib.request.urlopen(f"{base}/stream/trk_001", timeout=5) as response:
+signup_payload = {
+    "email": f"healthcheck-{uuid.uuid4().hex}@spotiboys.local",
+    "password": "spotiboys-demo-password",
+    "display_name": "Healthcheck Listener",
+}
+request = urllib.request.Request(
+    f"{base}/auth/signup",
+    data=json.dumps(signup_payload).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+with opener.open(request, timeout=5) as response:
+    auth = json.loads(response.read().decode("utf-8"))
+assert auth["auth_state"] == "authenticated"
+print("OK auth signup/session cookie")
+
+for label, url in [
+    ("playable track", f"{base}/playable-track/trk_001"),
+    ("stream mapped", f"{base}/stream/trk_001"),
+]:
+    with opener.open(url, timeout=5) as response:
+        status = response.status
+    if status >= 400:
+        print(f"FAIL {label}: HTTP {status}")
+        raise SystemExit(1)
+    print(f"OK {label}: HTTP {status}")
+
+with opener.open(f"{base}/stream/trk_001", timeout=5) as response:
     content_type = response.headers.get("content-type", "")
     prefix = response.read(8)
 if "audio/mpeg" not in content_type and not prefix.startswith(b"ID3"):
@@ -46,7 +74,7 @@ if "audio/mpeg" not in content_type and not prefix.startswith(b"ID3"):
 print("OK stream mapped real fixture audio")
 
 try:
-    urllib.request.urlopen(f"{base}/stream/trk_missing", timeout=5)
+    opener.open(f"{base}/stream/trk_missing", timeout=5)
 except urllib.error.HTTPError as exc:
     if exc.code == 404:
         print("OK stream unmapped fail-closed: HTTP 404")
@@ -57,7 +85,7 @@ else:
     print("FAIL stream unmapped should fail closed")
     raise SystemExit(1)
 
-with urllib.request.urlopen(f"{base}/session/bootstrap", timeout=5) as response:
+with opener.open(f"{base}/session/bootstrap", timeout=5) as response:
     payload = json.loads(response.read().decode("utf-8"))
 assert len(payload["browse_surface"]["featured_items"]) <= 4
 assert len(payload["browse_surface"]["random_carousel_items"]) <= 10
@@ -74,7 +102,7 @@ request = urllib.request.Request(
     headers={"Content-Type": "application/json"},
     method="POST",
 )
-with urllib.request.urlopen(request, timeout=5) as response:
+with opener.open(request, timeout=5) as response:
     rec = json.loads(response.read().decode("utf-8"))
 assert len(rec["browse_surface"]["featured_items"]) <= 4
 assert len(rec["browse_surface"]["random_carousel_items"]) <= 10
@@ -99,9 +127,9 @@ request = urllib.request.Request(
     headers={"Content-Type": "application/json"},
     method="POST",
 )
-with urllib.request.urlopen(request, timeout=5) as response:
+with opener.open(request, timeout=5) as response:
     first = json.loads(response.read().decode("utf-8"))
-with urllib.request.urlopen(request, timeout=5) as response:
+with opener.open(request, timeout=5) as response:
     duplicate = json.loads(response.read().decode("utf-8"))
 assert first["duplicate"] is False
 assert duplicate["duplicate"] is True
@@ -128,9 +156,9 @@ request = urllib.request.Request(
     headers={"Content-Type": "application/json"},
     method="POST",
 )
-with urllib.request.urlopen(request, timeout=5) as response:
+with opener.open(request, timeout=5) as response:
     first = json.loads(response.read().decode("utf-8"))
-with urllib.request.urlopen(request, timeout=5) as response:
+with opener.open(request, timeout=5) as response:
     duplicate = json.loads(response.read().decode("utf-8"))
 assert first["duplicate"] is False
 assert duplicate["duplicate"] is True
@@ -152,9 +180,9 @@ request = urllib.request.Request(
     headers={"Content-Type": "application/json"},
     method="POST",
 )
-with urllib.request.urlopen(request, timeout=5) as response:
+with opener.open(request, timeout=5) as response:
     first = json.loads(response.read().decode("utf-8"))
-with urllib.request.urlopen(request, timeout=5) as response:
+with opener.open(request, timeout=5) as response:
     duplicate = json.loads(response.read().decode("utf-8"))
 assert first["duplicate"] is False
 assert duplicate["duplicate"] is True

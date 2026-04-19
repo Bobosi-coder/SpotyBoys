@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from packages.auth import AuthenticatedSession
 from packages.db_access.repositories import PlayableTrackRecord
 from packages.shared_contracts.jsonutil import dumps, to_jsonable
 
@@ -13,6 +14,7 @@ class PostgresRepository:
 
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
+        self.ensure_auth_schema()
 
     def _connect(self):
         import psycopg2
@@ -83,6 +85,39 @@ class PostgresRepository:
                             row.get("navidrome_track_id"),
                         ),
                     )
+
+    def ensure_auth_schema(self) -> None:
+        """Apply additive auth/session guards for existing demo volumes."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("ALTER TABLE app.users ADD COLUMN IF NOT EXISTS email TEXT")
+                cur.execute("ALTER TABLE app.users ADD COLUMN IF NOT EXISTS password_hash TEXT")
+                cur.execute("ALTER TABLE app.users ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()")
+                cur.execute(
+                    """
+                    CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_email_unique
+                    ON app.users (LOWER(email))
+                    WHERE email IS NOT NULL
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS app.auth_sessions (
+                        session_token_hash TEXT PRIMARY KEY,
+                        session_id TEXT NOT NULL REFERENCES app.sessions(session_id),
+                        user_id TEXT NOT NULL REFERENCES app.users(user_id),
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        expires_at TIMESTAMPTZ NOT NULL,
+                        revoked_at TIMESTAMPTZ
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_app_auth_sessions_user
+                    ON app.auth_sessions(user_id, created_at DESC)
+                    """
+                )
 
     def list_playable_tracks(self) -> List[PlayableTrackRecord]:
         with self._connect() as conn:
@@ -292,6 +327,149 @@ class PostgresRepository:
                     ),
                 )
                 return cur.rowcount == 1
+
+    def create_user(self, user_id: str, email: str, password_hash: str, display_name: str) -> Dict[str, Any]:
+        normalized = email.strip().lower()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.users (user_id, email, password_hash, display_name)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (user_id) DO NOTHING
+                    """,
+                    (user_id, normalized, password_hash, display_name or normalized.split("@")[0]),
+                )
+                if cur.rowcount != 1:
+                    raise ValueError("user_id already exists")
+                return {
+                    "user_id": user_id,
+                    "email": normalized,
+                    "password_hash": password_hash,
+                    "display_name": display_name or normalized.split("@")[0],
+                }
+
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        normalized = email.strip().lower()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT user_id, COALESCE(email, ''), COALESCE(password_hash, ''), COALESCE(display_name, '')
+                    FROM app.users
+                    WHERE LOWER(email) = LOWER(%s)
+                    """,
+                    (normalized,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {"user_id": row[0], "email": row[1], "password_hash": row[2], "display_name": row[3]}
+
+    def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT user_id, COALESCE(email, ''), COALESCE(password_hash, ''), COALESCE(display_name, '')
+                    FROM app.users
+                    WHERE user_id = %s
+                    """,
+                    (user_id,),
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {"user_id": row[0], "email": row[1], "password_hash": row[2], "display_name": row[3]}
+
+    def create_auth_session(
+        self,
+        *,
+        token_hash: str,
+        user_id: str,
+        session_id: str,
+        expires_at,
+    ) -> AuthenticatedSession:
+        user = self.get_user_by_id(user_id)
+        if not user:
+            raise ValueError("unknown user")
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.sessions (session_id, user_id, auth_state)
+                    VALUES (%s, %s, 'authenticated')
+                    ON CONFLICT (session_id) DO UPDATE
+                    SET user_id = EXCLUDED.user_id,
+                        auth_state = 'authenticated',
+                        last_seen_at = NOW()
+                    """,
+                    (session_id, user_id),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO app.auth_sessions
+                        (session_token_hash, session_id, user_id, expires_at)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (session_token_hash) DO UPDATE SET
+                        revoked_at = NULL,
+                        expires_at = EXCLUDED.expires_at
+                    """,
+                    (token_hash, session_id, user_id, expires_at),
+                )
+        return AuthenticatedSession(
+            user_id=user_id,
+            session_id=session_id,
+            email=user["email"],
+            display_name=user.get("display_name", ""),
+        )
+
+    def get_auth_session(self, token_hash: str) -> Optional[AuthenticatedSession]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT s.user_id, s.session_id, COALESCE(u.email, ''), COALESCE(u.display_name, '')
+                    FROM app.auth_sessions s
+                    JOIN app.users u ON u.user_id = s.user_id
+                    WHERE s.session_token_hash = %s
+                      AND s.revoked_at IS NULL
+                      AND s.expires_at > NOW()
+                    """,
+                    (token_hash,),
+                )
+                row = cur.fetchone()
+                if row:
+                    cur.execute("UPDATE app.sessions SET last_seen_at = NOW() WHERE session_id = %s", (row[1],))
+        if not row:
+            return None
+        return AuthenticatedSession(user_id=row[0], session_id=row[1], email=row[2], display_name=row[3])
+
+    def revoke_auth_session(self, token_hash: str) -> bool:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE app.auth_sessions
+                    SET revoked_at = NOW()
+                    WHERE session_token_hash = %s AND revoked_at IS NULL
+                    """,
+                    (token_hash,),
+                )
+                return cur.rowcount == 1
+
+    def list_disliked_track_ids(self, user_id: str) -> List[str]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT track_id
+                    FROM app.feedback_events
+                    WHERE user_id = %s AND feedback_type = 'dislike'
+                    """,
+                    (user_id,),
+                )
+                return [str(row[0]) for row in cur.fetchall()]
 
     def count_table(self, table_name: str) -> int:
         allowed = {

@@ -8,10 +8,19 @@ const state = {
   drawerOpen: false,
   currentTrack: null,
   playbackAttemptId: null,
-  emittedPlaybackStarts: new Set()
+  emittedPlaybackStarts: new Set(),
+  authMode: "login"
 };
 
 const els = {
+  authPanel: document.getElementById("auth-panel"),
+  authCopy: document.getElementById("auth-copy"),
+  authEmail: document.getElementById("auth-email"),
+  authPassword: document.getElementById("auth-password"),
+  authDisplayName: document.getElementById("auth-display-name"),
+  authError: document.getElementById("auth-error"),
+  authSubmit: document.getElementById("auth-submit"),
+  authToggle: document.getElementById("auth-toggle"),
   featured: document.getElementById("featured"),
   random: document.getElementById("random-carousel"),
   drawer: document.getElementById("playlist-drawer"),
@@ -26,7 +35,8 @@ const els = {
   audio: document.getElementById("audio-player"),
   status: document.getElementById("status"),
   revision: document.getElementById("queue-revision"),
-  modelVersion: document.getElementById("model-version")
+  modelVersion: document.getElementById("model-version"),
+  logout: document.getElementById("logout-button")
 };
 
 function apiUrl(base, path) {
@@ -36,10 +46,20 @@ function apiUrl(base, path) {
 async function fetchJson(url, options = {}) {
   const response = await fetch(url, {
     headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
     ...options
   });
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    let detail = "";
+    try {
+      const payload = await response.json();
+      detail = Array.isArray(payload.detail)
+        ? payload.detail.map((item) => item.msg || item.type || "validation error").join("; ")
+        : (payload.detail || "");
+    } catch (_error) {
+      detail = response.statusText;
+    }
+    throw new Error(`${response.status} ${detail || response.statusText}`);
   }
   return response.json();
 }
@@ -47,6 +67,7 @@ async function fetchJson(url, options = {}) {
 async function bootstrap() {
   try {
     const payload = await fetchJson(apiUrl(recommendationBase, "/session/bootstrap"));
+    showAuth(false);
     state.session = { session_id: payload.session_id, user_id: payload.user_id };
     state.browseSurface = payload.browse_surface;
     state.queue = payload.queue;
@@ -54,8 +75,73 @@ async function bootstrap() {
     renderAll();
     emitImpression("bootstrap_render", payload.queue.items[0]?.request_id || "req_bootstrap", payload.queue.items[0]?.impression_id || "imp_bootstrap");
   } catch (error) {
-    showStatus("Service unavailable. Demo UI is waiting for backend recovery.");
+    showAuth(true);
+    if (!String(error.message).startsWith("401")) {
+      showStatus("Service unavailable. You can sign in once the backend recovers.");
+    }
   }
+}
+
+function showAuth(open) {
+  els.authPanel.classList.toggle("hidden", !open);
+}
+
+async function submitAuth() {
+  clearAuthError();
+  const email = els.authEmail.value.trim();
+  const password = els.authPassword.value;
+  if (!email.includes("@")) {
+    showAuthError("Enter a valid email address.");
+    return;
+  }
+  if (password.length < 8) {
+    showAuthError("Password must be at least 8 characters.");
+    return;
+  }
+  const path = state.authMode === "signup" ? "/auth/signup" : "/auth/login";
+  const body = {
+    email,
+    password
+  };
+  if (state.authMode === "signup") {
+    body.display_name = els.authDisplayName.value;
+  }
+  try {
+    els.authSubmit.disabled = true;
+    await fetchJson(apiUrl(recommendationBase, path), { method: "POST", body: JSON.stringify(body) });
+    showStatus("");
+    els.status.classList.add("hidden");
+    await bootstrap();
+  } catch (error) {
+    const message = String(error.message);
+    showAuthError(
+      state.authMode === "signup"
+        ? `Signup failed. ${message.replace(/^422\s*/, "")}`
+        : "Login failed. Check your email and password, or create a new account."
+    );
+  } finally {
+    els.authSubmit.disabled = false;
+  }
+}
+
+function showAuthError(message) {
+  els.authError.textContent = message;
+  els.authError.classList.remove("hidden");
+}
+
+function clearAuthError() {
+  els.authError.textContent = "";
+  els.authError.classList.add("hidden");
+}
+
+function toggleAuthMode() {
+  state.authMode = state.authMode === "login" ? "signup" : "login";
+  const signup = state.authMode === "signup";
+  els.authDisplayName.classList.toggle("hidden", !signup);
+  els.authSubmit.textContent = signup ? "Sign up" : "Log in";
+  els.authToggle.textContent = signup ? "Use login" : "Create account";
+  els.authCopy.textContent = signup ? "Create a first-party account for this listening session." : "Sign in to start your listening session.";
+  clearAuthError();
 }
 
 function renderAll() {
@@ -228,6 +314,25 @@ els.skipBack.addEventListener("click", () => {
   if (els.audio.currentTime > 3) {
     els.audio.currentTime = 0;
   }
+});
+els.authSubmit.addEventListener("click", submitAuth);
+els.authToggle.addEventListener("click", toggleAuthMode);
+[els.authEmail, els.authPassword, els.authDisplayName].forEach((input) => {
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      submitAuth();
+    }
+  });
+});
+els.logout.addEventListener("click", async () => {
+  await fetchJson(apiUrl(recommendationBase, "/auth/logout"), { method: "POST", body: "{}" }).catch(() => null);
+  state.session = null;
+  state.queue = { items: [], revision: 1, drawer_default_open: false };
+  state.browseSurface = { featured_items: [], random_carousel_items: [] };
+  els.audio.pause();
+  els.audio.removeAttribute("src");
+  renderAll();
+  showAuth(true);
 });
 els.audio.addEventListener("playing", emitPlaybackStartOnce);
 els.audio.addEventListener("ended", refreshRecommendations);

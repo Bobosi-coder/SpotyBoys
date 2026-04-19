@@ -6,6 +6,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from packages.artifact_runtime import ServingBundle
+from packages.auth import (
+    hash_password,
+    hash_session_token,
+    new_session_id,
+    new_session_token,
+    new_user_id,
+    session_expires_at,
+    verify_password,
+)
 from packages.config import AppConfig
 from packages.db_access.demo_bootstrap import reset_demo_components
 from packages.navidrome_adapter import MediaAccessService
@@ -16,8 +25,11 @@ from packages.shared_contracts.manifests import (
     validate_serving_bundle_manifest,
 )
 from packages.shared_contracts.schemas import (
+    AuthResponse,
+    AuthUser,
     BootstrapResponse,
     DegradedState,
+    FeedbackEventRequest,
     ImpressionEventRequest,
     PlaybackEventRequest,
     QueueState,
@@ -196,6 +208,58 @@ class BackendContractTests(unittest.TestCase):
         removed = self.recommender.last_pipeline_trace.c4_removed_track_ids  # type: ignore[union-attr]
         self.assertIn(first.queue.items[0].track_id, removed)
         self.assertNotIn(first.queue.items[0].track_id, [item.track_id for item in second.queue.items])
+
+    def test_dislike_feedback_changes_future_policy_filtering(self) -> None:
+        first = self.recommender.recommend_next(RecommendationRequest(session_id="sess_dislike", user_id="user_demo"))
+        disliked_track = first.queue.items[0]
+        feedback = FeedbackEventRequest(
+            event_id="evt_dislike_once",
+            feedback_type="dislike",
+            session_id="sess_dislike",
+            user_id="user_demo",
+            track_id=disliked_track.track_id,
+            request_id=disliked_track.request_id,
+            impression_id=disliked_track.impression_id,
+            occurred_at=datetime.now(timezone.utc),
+        )
+        self.repository.persist_feedback_event(feedback.event_id, feedback.dict())
+
+        second = self.recommender.recommend_next(RecommendationRequest(session_id="sess_dislike_next", user_id="user_demo"))
+        self.assertNotIn(disliked_track.track_id, [item.track_id for item in second.queue.items])
+        trace = self.recommender.last_pipeline_trace
+        self.assertIsNotNone(trace)
+        assert trace is not None
+        self.assertIn(disliked_track.track_id, trace.c4_removed_track_ids)
+
+    def test_auth_session_repository_contract(self) -> None:
+        password_hash = hash_password("spotiboys-password")
+        self.assertTrue(verify_password("spotiboys-password", password_hash))
+        self.assertFalse(verify_password("wrong-password", password_hash))
+        user = self.repository.create_user(
+            new_user_id(),
+            "listener@example.com",
+            password_hash,
+            "Listener",
+        )
+        token = new_session_token()
+        auth_session = self.repository.create_auth_session(
+            token_hash=hash_session_token(token),
+            user_id=user["user_id"],
+            session_id=new_session_id(),
+            expires_at=session_expires_at(),
+        )
+        payload = AuthResponse(
+            user=AuthUser(
+                user_id=auth_session.user_id,
+                email=auth_session.email,
+                display_name=auth_session.display_name,
+            ),
+            session_id=auth_session.session_id,
+        )
+        self.assertEqual(payload.user.email, "listener@example.com")
+        self.assertIsNotNone(self.repository.get_auth_session(hash_session_token(token)))
+        self.assertTrue(self.repository.revoke_auth_session(hash_session_token(token)))
+        self.assertIsNone(self.repository.get_auth_session(hash_session_token(token)))
 
     def test_manifest_validators(self) -> None:
         serving_manifest = json.loads((PROJECT_ROOT / "fixtures" / "serving_bundle_manifest.json").read_text())

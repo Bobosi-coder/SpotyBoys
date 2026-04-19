@@ -4,12 +4,26 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SpotiBoys</title>
-    <link rel="stylesheet" href="./src/styles.css" />
+    <link rel="stylesheet" href="./src/styles.css?v=iteration4-auth-3" />
   </head>
   <body>
     <main class="stage">
       <section class="shell" data-testid="app-shell">
         <aside class="brand-rail" data-testid="left-brand-rail">SpotiBoys</aside>
+        <section id="auth-panel" class="auth-panel hidden" data-testid="auth-panel">
+          <div class="auth-box">
+            <h1>SpotiBoys</h1>
+            <p id="auth-copy">Sign in to start your listening session.</p>
+            <div id="auth-error" class="auth-error hidden"></div>
+            <input id="auth-email" type="email" autocomplete="email" placeholder="Email" required />
+            <input id="auth-password" type="password" autocomplete="current-password" placeholder="Password, 8+ characters" minlength="8" required />
+            <input id="auth-display-name" type="text" autocomplete="name" placeholder="Display name" class="hidden" />
+            <div class="auth-actions">
+              <button id="auth-submit" class="auth-button primary">Log in</button>
+              <button id="auth-toggle" class="auth-button">Create account</button>
+            </div>
+          </div>
+        </section>
         <section class="content">
           <div id="status" class="status hidden" data-testid="status-banner"></div>
           <section class="featured-wrap">
@@ -42,6 +56,7 @@
               <span id="now-artist">Demo session</span>
             </div>
           </div>
+          <button id="logout-button" class="logout-button" aria-label="Log out">Log out</button>
           <div class="dock-controls" data-testid="dock-primary-controls">
             <button id="skip-back" class="dock-button" aria-label="Skip back">&lt;&lt;</button>
             <button id="play-pause" class="dock-button primary" aria-label="Play or pause">Play</button>
@@ -58,6 +73,6 @@
         window.SPOTIBOYS_EVENT_API = location.origin;
       }
     </script>
-    <script src="./src/app.js"></script>
+    <script src="./src/app.js?v=iteration4-auth-3"></script>
   </body>
 </html>

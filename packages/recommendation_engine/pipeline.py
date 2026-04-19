@@ -27,6 +27,7 @@ class PipelineTrace:
     c3_ranker_invoked: bool
     c4_policy_invoked: bool
     c4_removed_track_ids: List[str]
+    c4_disliked_track_ids: List[str]
     final_track_ids: List[str]
 
 
@@ -40,7 +41,7 @@ class ServingRecommendationPipeline:
         self.cooc_playlist = _load_score_file(root / "cooc_playlist.npz")
         self.centroids = _load_json_scores(root / "user_centroids.pkl")
         self.ranker_weights = _load_json(root / "gru_ranker.pt")
-        self.last_trace = PipelineTrace([], 0, [], False, False, [], [])
+        self.last_trace = PipelineTrace([], 0, [], False, False, [], [], [])
 
     def recommend(
         self,
@@ -48,10 +49,12 @@ class ServingRecommendationPipeline:
         *,
         user_id: str,
         recent_track_ids: Iterable[str],
+        disliked_track_ids: Iterable[str] = (),
     ) -> List[PlayableTrackRecord]:
         candidates = self.retrieve_candidates(playable_tracks, user_id=user_id)
         ranked = self.rank_candidates(candidates)
-        final = self.apply_policy(ranked, recent_track_ids=set(recent_track_ids))
+        disliked = set(disliked_track_ids)
+        final = self.apply_policy(ranked, recent_track_ids=set(recent_track_ids), disliked_track_ids=disliked)
         self.last_trace = PipelineTrace(
             c1_artifacts_loaded=[
                 "gru_ranker.pt",
@@ -66,6 +69,7 @@ class ServingRecommendationPipeline:
             c3_ranker_invoked=True,
             c4_policy_invoked=True,
             c4_removed_track_ids=[item.track.track_id for item in ranked if item.track.track_id not in {x.track.track_id for x in final}],
+            c4_disliked_track_ids=sorted(disliked),
             final_track_ids=[item.track.track_id for item in final],
         )
         return [item.track for item in final]
@@ -123,11 +127,18 @@ class ServingRecommendationPipeline:
             )
         return sorted(ranked, key=lambda item: (-item.ranker_score, item.track.track_id))
 
-    def apply_policy(self, ranked: Sequence[Candidate], *, recent_track_ids: set[str]) -> List[Candidate]:
+    def apply_policy(
+        self,
+        ranked: Sequence[Candidate],
+        *,
+        recent_track_ids: set[str],
+        disliked_track_ids: set[str] | None = None,
+    ) -> List[Candidate]:
+        disliked_track_ids = disliked_track_ids or set()
         output: List[Candidate] = []
         artist_counts: Dict[str, int] = {}
         for item in ranked:
-            if item.track.track_id in recent_track_ids:
+            if item.track.track_id in recent_track_ids or item.track.track_id in disliked_track_ids:
                 continue
             penalty = 0.18 * artist_counts.get(item.track.artist, 0)
             output.append(

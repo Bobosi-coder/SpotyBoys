@@ -7,7 +7,7 @@ COPY infra/ /app/infra/
 COPY workers/ /app/workers/
 COPY apps/recommendation-api/ /app/apps/recommendation-api/
 
-RUN pip install --no-cache-dir fastapi==0.92.0 uvicorn==0.20.0 pydantic==1.10.13 psycopg2-binary==2.9.9 redis==5.0.1
+RUN pip install --no-cache-dir fastapi==0.92.0 uvicorn==0.20.0 pydantic==1.10.13 psycopg2-binary==2.9.9 redis==5.0.1 pyarrow==15.0.2
 
 ENV PYTHONPATH=/app
 EXPOSE 8001

@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from packages.auth import require_authenticated_session
 from packages.config import load_config
 from packages.db_access.factory import build_repository_and_runtime
 from packages.shared_contracts.schemas import (
@@ -37,24 +38,36 @@ def health() -> dict:
 
 
 @app.post("/events/impression", response_model=EventAck)
-def impression_event(request: ImpressionEventRequest) -> EventAck:
-    accepted = runtime_state.remember_once("idem:impression", request.impression_id)
+def impression_event(payload: ImpressionEventRequest, request: Request) -> EventAck:
+    auth_session = require_authenticated_session(request, repository)
+    authenticated_payload = payload.copy(
+        update={"session_id": auth_session.session_id, "user_id": auth_session.user_id}
+    )
+    accepted = runtime_state.remember_once("idem:impression", authenticated_payload.impression_id)
     if accepted:
-        repository.persist_rendered_impression(request.impression_id, request.dict())
-    return EventAck(status="ok", duplicate=not accepted, impression_id=request.impression_id)
+        repository.persist_rendered_impression(authenticated_payload.impression_id, authenticated_payload.dict())
+    return EventAck(status="ok", duplicate=not accepted, impression_id=authenticated_payload.impression_id)
 
 
 @app.post("/events/playback", response_model=EventAck)
-def playback_event(request: PlaybackEventRequest) -> EventAck:
-    accepted = runtime_state.remember_once("idem:playback", request.event_id)
+def playback_event(payload: PlaybackEventRequest, request: Request) -> EventAck:
+    auth_session = require_authenticated_session(request, repository)
+    authenticated_payload = payload.copy(
+        update={"session_id": auth_session.session_id, "user_id": auth_session.user_id}
+    )
+    accepted = runtime_state.remember_once("idem:playback", authenticated_payload.event_id)
     if accepted:
-        repository.persist_playback_event(request.event_id, request.dict())
-    return EventAck(status="ok", duplicate=not accepted, event_id=request.event_id)
+        repository.persist_playback_event(authenticated_payload.event_id, authenticated_payload.dict())
+    return EventAck(status="ok", duplicate=not accepted, event_id=authenticated_payload.event_id)
 
 
 @app.post("/events/feedback", response_model=EventAck)
-def feedback_event(request: FeedbackEventRequest) -> EventAck:
-    accepted = runtime_state.remember_once("idem:feedback", request.event_id)
+def feedback_event(payload: FeedbackEventRequest, request: Request) -> EventAck:
+    auth_session = require_authenticated_session(request, repository)
+    authenticated_payload = payload.copy(
+        update={"session_id": auth_session.session_id, "user_id": auth_session.user_id}
+    )
+    accepted = runtime_state.remember_once("idem:feedback", authenticated_payload.event_id)
     if accepted:
-        repository.persist_feedback_event(request.event_id, request.dict())
-    return EventAck(status="ok", duplicate=not accepted, event_id=request.event_id)
+        repository.persist_feedback_event(authenticated_payload.event_id, authenticated_payload.dict())
+    return EventAck(status="ok", duplicate=not accepted, event_id=authenticated_payload.event_id)

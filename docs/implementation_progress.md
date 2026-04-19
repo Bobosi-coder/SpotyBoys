@@ -36,16 +36,25 @@
 - Iteration 3: `/stream/{track_id}` now proxies Navidrome audio in local fixture and VM library modes.
 - Iteration 3: added C1/C2/C3/C4 model-stack verification docs and a traceable serving pipeline.
 - Iteration 3: C2 retrieval, C3 ranker scoring, and C4 policy reranking now execute in the recommendation path.
+- Iteration 4: added first-party email/password signup, login, logout, and HttpOnly session-cookie auth.
+- Iteration 4: recommendation bootstrap/next now use backend-authenticated user/session identity instead of config globals or client identity.
+- Iteration 4: event ingestion now binds persisted user/session IDs to the authenticated cookie.
+- Iteration 4: playable-track, stream, and cover routes now require authenticated session cookies.
+- Iteration 4: added durable auth-session schema and in-memory test implementation.
+- Iteration 4: C4 policy now filters durable dislikes before final queue creation.
+- Iteration 4: parser export now writes real parquet via pyarrow instead of CSV bytes with parquet names.
+- Iteration 4: artifact refresh worker now validates promoted Real_service bundles, stages them, and writes a restart-required activation marker.
+- Iteration 4: added gap analysis, execution plan, auth/session design, model-runtime verification, retraining loop status, and validation runbook docs.
 
 ## In Progress
 
-- VM1 Compose stack is running for browser review at `http://127.0.0.1:5173`.
+- VM1 Compose stack is running with authenticated APIs at `http://127.0.0.1:5173`.
 
 ## Remaining
 
-- Complete full Navidrome Subsonic user bootstrap and scan-ID reconciliation for local fixture libraries.
-- Extend artifact-backed recommendation runtime beyond `pop_scores.csv` to GRU/co-occurrence scoring.
-- Upgrade parser export from CSV-compatible contract files to real parquet in the service image.
+- Replace the local deterministic GRU-surrogate fixture with the trained production torch GRU checkpoint in the promoted VM bundle.
+- Complete VM2 retraining/evaluation/promotion automation beyond scaffolds.
+- Add TLS/secure-cookie deployment configuration at VM ingress.
 
 ## Commands Run
 
@@ -55,8 +64,16 @@
 - `chmod +x infra/scripts/demo_up.sh infra/scripts/demo_down.sh infra/scripts/healthcheck_demo.sh infra/scripts/seed_demo_data.sh`
 - `python3 -m compileall packages apps infra/scripts tests`
 - `python3 -m unittest discover -s tests -v`
+- `python3 -m compileall packages apps infra/scripts workers jobs tests`
+- `bash infra/scripts/demo_up.sh compose`
+- `bash infra/scripts/healthcheck_demo.sh`
+- `docker compose --profile jobs run --rm parser-export-worker`
+- `docker compose --profile jobs run --rm artifact-refresh-worker`
+- `docker run --rm -v mlopsproject_spotiboys-object-storage:/object-storage alpine:3.20 find /object-storage -maxdepth 5 -type f`
+- `docker run --rm -v mlopsproject_spotiboys-object-storage:/object-storage mlopsproject_parser-export-worker python -c "... pyarrow.parquet ..."`
 - `bash infra/scripts/demo_up.sh`
 - `bash infra/scripts/healthcheck_demo.sh`
+- `python3 -m unittest discover -s tests -v`
 - `docker compose -f docker-compose.yml exec -T postgres psql ... navidrome_track_mapping ...`
 - `docker compose -f docker-compose.yml exec -T recommendation-api python ... /stream/trk_001`
 - `docker compose -f infra/docker/docker-compose.demo.yml up --build -d`
@@ -83,7 +100,7 @@
 
 ## Tests Run
 
-- `python3 -m unittest discover -s tests -v`: 15 tests passed.
+- `python3 -m unittest discover -s tests -v`: 17 tests passed after iteration-4 auth/session and dislike-policy changes.
 - `python3 -m compileall packages apps infra/scripts workers jobs tests`: passed.
 - `python3 infra/scripts/validate_delta_manifest.py`: passed.
 - `python3 infra/scripts/validate_serving_bundle.py`: passed.
@@ -94,6 +111,10 @@
 - `python3 infra/scripts/validate_delta_manifest.py fixtures/delta_manifest.json`: passed.
 - `bash infra/scripts/healthcheck_demo.sh`: passed against the Compose stack through nginx, including Postgres and Redis service status.
 - `bash infra/scripts/healthcheck_demo.sh`: iteration-3 check passed and verifies mapped stream returns real MP3/Navidrome fixture audio.
+- `bash infra/scripts/healthcheck_demo.sh`: iteration-4 check passed and verifies auth signup/session cookie, authenticated playable/stream routes, authenticated bootstrap/recommendations, event idempotency, mapped real stream, and unmapped fail-closed stream.
+- `docker compose --profile jobs run --rm parser-export-worker`: completed and wrote parquet delta files plus manifest under the object-storage volume.
+- `docker run ... pyarrow.parquet ...`: read exported `session_tracks.parquet` successfully and returned 18 rows.
+- `docker compose --profile jobs run --rm artifact-refresh-worker`: completed after staging a promoted fixture bundle and wrote `vm1_staged_serving/Real_service/restart_required.json`.
 - Live stream verification inside the recommendation API container returned `200 audio/mpeg` with MP3 `ID3` bytes for `/stream/trk_001`.
 - Postgres mapping verification showed canonical `trk_001`, `trk_003`, and `trk_010` mapped to actual Navidrome media IDs, not static `nav_001` placeholders.
 - VM1 Compose status shows nginx, frontend, recommendation API, event API, Postgres, Redis, and Navidrome running; fixture music and catalog sync completed successfully.

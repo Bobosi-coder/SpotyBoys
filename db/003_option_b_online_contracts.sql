@@ -9,8 +9,11 @@ CREATE SCHEMA IF NOT EXISTS app;
 
 CREATE TABLE IF NOT EXISTS app.users (
     user_id TEXT PRIMARY KEY,
+    email TEXT UNIQUE,
+    password_hash TEXT,
     display_name TEXT,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS app.sessions (
@@ -19,6 +22,15 @@ CREATE TABLE IF NOT EXISTS app.sessions (
     auth_state TEXT NOT NULL DEFAULT 'authenticated',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS app.auth_sessions (
+    session_token_hash TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES app.sessions(session_id),
+    user_id TEXT NOT NULL REFERENCES app.users(user_id),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS app.playable_tracks (
@@ -134,5 +146,7 @@ CREATE INDEX IF NOT EXISTS idx_app_playback_events_session
     ON app.playback_events(session_id, occurred_at);
 CREATE INDEX IF NOT EXISTS idx_app_feedback_events_session
     ON app.feedback_events(session_id, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_app_auth_sessions_user
+    ON app.auth_sessions(user_id, created_at DESC);
 
 COMMIT;

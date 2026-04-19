@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+
+from packages.auth import AuthenticatedSession
 
 
 @dataclass(frozen=True)
@@ -25,6 +28,9 @@ class DemoRepository:
 
     def __init__(self, tracks: Iterable[PlayableTrackRecord]) -> None:
         self._tracks: Dict[str, PlayableTrackRecord] = {track.track_id: track for track in tracks}
+        self.users: Dict[str, Dict[str, Any]] = {}
+        self.users_by_email: Dict[str, str] = {}
+        self.auth_sessions: Dict[str, Dict[str, Any]] = {}
         self.recommendation_impressions: Dict[str, Dict[str, Any]] = {}
         self.rendered_impressions: Dict[str, Dict[str, Any]] = {}
         self.playback_events: Dict[str, Dict[str, Any]] = {}
@@ -95,6 +101,81 @@ class DemoRepository:
             return False
         self.feedback_events[event_id] = dict(payload)
         return True
+
+    def create_user(self, user_id: str, email: str, password_hash: str, display_name: str) -> Dict[str, Any]:
+        normalized = email.strip().lower()
+        if normalized in self.users_by_email:
+            raise ValueError("email already registered")
+        record = {
+            "user_id": user_id,
+            "email": normalized,
+            "password_hash": password_hash,
+            "display_name": display_name or normalized.split("@")[0],
+        }
+        self.users[user_id] = record
+        self.users_by_email[normalized] = user_id
+        return dict(record)
+
+    def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        user_id = self.users_by_email.get(email.strip().lower())
+        return dict(self.users[user_id]) if user_id else None
+
+    def get_user_by_id(self, user_id: str) -> Optional[Dict[str, Any]]:
+        record = self.users.get(user_id)
+        return dict(record) if record else None
+
+    def create_auth_session(
+        self,
+        *,
+        token_hash: str,
+        user_id: str,
+        session_id: str,
+        expires_at: datetime,
+    ) -> AuthenticatedSession:
+        user = self.users[user_id]
+        self.auth_sessions[token_hash] = {
+            "user_id": user_id,
+            "session_id": session_id,
+            "expires_at": expires_at,
+            "revoked": False,
+        }
+        return AuthenticatedSession(
+            user_id=user_id,
+            session_id=session_id,
+            email=user["email"],
+            display_name=user.get("display_name", ""),
+        )
+
+    def get_auth_session(self, token_hash: str) -> Optional[AuthenticatedSession]:
+        record = self.auth_sessions.get(token_hash)
+        if not record or record.get("revoked"):
+            return None
+        expires_at = record["expires_at"]
+        if expires_at < datetime.now(timezone.utc):
+            return None
+        user = self.users.get(record["user_id"])
+        if not user:
+            return None
+        return AuthenticatedSession(
+            user_id=record["user_id"],
+            session_id=record["session_id"],
+            email=user["email"],
+            display_name=user.get("display_name", ""),
+        )
+
+    def revoke_auth_session(self, token_hash: str) -> bool:
+        record = self.auth_sessions.get(token_hash)
+        if not record:
+            return False
+        record["revoked"] = True
+        return True
+
+    def list_disliked_track_ids(self, user_id: str) -> List[str]:
+        return [
+            str(event["track_id"])
+            for event in self.feedback_events.values()
+            if event.get("user_id") == user_id and event.get("feedback_type") == "dislike"
+        ]
 
     def seed_demo_state(self, user_id: str, session_id: str) -> None:
         return None

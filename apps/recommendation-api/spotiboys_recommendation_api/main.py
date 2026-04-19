@@ -2,24 +2,39 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from packages.artifact_runtime import ServingBundle
+from packages.auth import (
+    clear_session_cookie,
+    hash_password,
+    hash_session_token,
+    new_session_id,
+    new_session_token,
+    new_user_id,
+    require_authenticated_session,
+    session_expires_at,
+    set_session_cookie,
+    verify_password,
+)
 from packages.config import load_config
 from packages.db_access.factory import build_repository_and_runtime
 from packages.navidrome_adapter import MediaAccessService
 from packages.recommendation_engine import RecommendationService
 from packages.shared_contracts.schemas import (
+    AuthResponse,
+    AuthUser,
     BootstrapResponse,
     DegradedState,
+    LoginRequest,
+    LogoutResponse,
     QueueState,
     RecommendationRequest,
+    SignupRequest,
 )
 
 config = load_config()
-SESSION_ID = config.session_id
-USER_ID = config.user_id
 
 repository, runtime_state = build_repository_and_runtime(config)
 serving_bundle = ServingBundle.load(config.serving_bundle_path)
@@ -57,17 +72,95 @@ def ready() -> dict:
     }
 
 
+def _auth_response(auth_session) -> AuthResponse:
+    return AuthResponse(
+        user=AuthUser(
+            user_id=auth_session.user_id,
+            email=auth_session.email,
+            display_name=auth_session.display_name,
+        ),
+        session_id=auth_session.session_id,
+    )
+
+
+@app.post("/auth/signup", response_model=AuthResponse)
+def signup(payload: SignupRequest, response: Response) -> AuthResponse:
+    existing = repository.get_user_by_email(payload.email)
+    if existing:
+        raise HTTPException(status_code=409, detail="email already registered")
+    user_id = new_user_id()
+    repository.create_user(user_id, payload.email, hash_password(payload.password), payload.display_name)
+    token = new_session_token()
+    expires_at = session_expires_at()
+    auth_session = repository.create_auth_session(
+        token_hash=hash_session_token(token),
+        user_id=user_id,
+        session_id=new_session_id(),
+        expires_at=expires_at,
+    )
+    set_session_cookie(response, token, expires_at)
+    return _auth_response(auth_session)
+
+
+@app.post("/auth/login", response_model=AuthResponse)
+def login(payload: LoginRequest, response: Response) -> AuthResponse:
+    user = repository.get_user_by_email(payload.email)
+    if not user or not user.get("password_hash") or not verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="invalid email or password")
+    token = new_session_token()
+    expires_at = session_expires_at()
+    auth_session = repository.create_auth_session(
+        token_hash=hash_session_token(token),
+        user_id=user["user_id"],
+        session_id=new_session_id(),
+        expires_at=expires_at,
+    )
+    set_session_cookie(response, token, expires_at)
+    return _auth_response(auth_session)
+
+
+@app.post("/auth/logout", response_model=LogoutResponse)
+def logout(request: Request, response: Response) -> LogoutResponse:
+    token = request.cookies.get("spotiboys_session")
+    if token:
+        repository.revoke_auth_session(hash_session_token(token))
+    clear_session_cookie(response)
+    return LogoutResponse()
+
+
+@app.get("/auth/me", response_model=AuthResponse)
+def auth_me(request: Request) -> AuthResponse:
+    return _auth_response(require_authenticated_session(request, repository))
+
+
 @app.get("/session/bootstrap", response_model=BootstrapResponse)
-def bootstrap() -> BootstrapResponse:
-    queue = runtime_state.get_queue(SESSION_ID)
+def bootstrap(request: Request) -> BootstrapResponse:
+    auth_session = require_authenticated_session(request, repository)
+    queue = runtime_state.get_queue(auth_session.session_id)
     if not queue.items:
-        browse_surface, queue_items = recommendation_service.build_bootstrap_surfaces(SESSION_ID, USER_ID)
-        queue = runtime_state.set_queue(SESSION_ID, queue_items)
+        browse_surface, queue_items = recommendation_service.build_bootstrap_surfaces(
+            auth_session.session_id,
+            auth_session.user_id,
+        )
+        queue = runtime_state.set_queue(auth_session.session_id, queue_items)
     else:
-        browse_surface, _ = recommendation_service.build_bootstrap_surfaces(SESSION_ID, USER_ID)
+        browse_surface, _ = recommendation_service.build_bootstrap_surfaces(auth_session.session_id, auth_session.user_id)
+    repository.persist_recommendation_impression(
+        f"imp_bootstrap_{auth_session.session_id}",
+        {
+            "request_id": f"req_bootstrap_{auth_session.session_id}",
+            "session_id": auth_session.session_id,
+            "user_id": auth_session.user_id,
+            "model_version": recommendation_service.model_version,
+            "fallback_level": "none",
+            "browse_surface": browse_surface.dict(),
+            "queue": {"items": [item.dict() for item in queue.items], "revision": queue.revision},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     return BootstrapResponse(
-        session_id=SESSION_ID,
-        user_id=USER_ID,
+        session_id=auth_session.session_id,
+        user_id=auth_session.user_id,
         auth_state="authenticated",
         browse_surface=browse_surface,
         queue=QueueState(
@@ -83,12 +176,21 @@ def bootstrap() -> BootstrapResponse:
 
 
 @app.post("/recommendations/next")
-def recommendations_next(request: RecommendationRequest) -> dict:
-    return recommendation_service.recommend_next(request).dict()
+def recommendations_next(payload: RecommendationRequest, request: Request) -> dict:
+    auth_session = require_authenticated_session(request, repository)
+    authenticated_payload = RecommendationRequest(
+        session_id=auth_session.session_id,
+        user_id=auth_session.user_id,
+        request_id=payload.request_id,
+        seed_track_ids=payload.seed_track_ids,
+        queue_revision=payload.queue_revision,
+    )
+    return recommendation_service.recommend_next(authenticated_payload).dict()
 
 
 @app.get("/playable-track/{track_id}")
-def playable_track(track_id: str) -> dict:
+def playable_track(track_id: str, request: Request) -> dict:
+    require_authenticated_session(request, repository)
     try:
         return media_service.resolve_playable_track(track_id).dict()
     except LookupError as exc:
@@ -96,7 +198,8 @@ def playable_track(track_id: str) -> dict:
 
 
 @app.get("/stream/{track_id}")
-def stream(track_id: str) -> Response:
+def stream(track_id: str, request: Request) -> Response:
+    require_authenticated_session(request, repository)
     try:
         payload, media_type = media_service.stream_bytes(track_id)
     except LookupError as exc:
@@ -105,7 +208,8 @@ def stream(track_id: str) -> Response:
 
 
 @app.get("/covers/{track_id}")
-def cover_art(track_id: str) -> Response:
+def cover_art(track_id: str, request: Request) -> Response:
+    require_authenticated_session(request, repository)
     track = repository.get_track(track_id)
     if not track:
         raise HTTPException(status_code=404, detail="track not found")

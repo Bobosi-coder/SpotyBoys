@@ -73,6 +73,44 @@ class DegradedState(BaseModel):
     recommendations: bool = False
 
 
+class AuthUser(BaseModel):
+    user_id: str
+    email: str
+    display_name: str = ""
+
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str = Field(..., min_length=8)
+    display_name: str = ""
+
+    @validator("email")
+    def normalize_email(cls, value: str) -> str:
+        email = value.strip().lower()
+        if "@" not in email:
+            raise ValueError("valid email is required")
+        return email
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str = Field(..., min_length=1)
+
+    @validator("email")
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+
+class AuthResponse(BaseModel):
+    user: AuthUser
+    session_id: str
+    auth_state: str = "authenticated"
+
+
+class LogoutResponse(BaseModel):
+    status: str = "ok"
+
+
 class BootstrapResponse(BaseModel):
     session_id: str
     user_id: str
@@ -169,4 +207,3 @@ class ServingBundleManifest(BaseModel):
     artifacts: List[str]
     model_version: str
     checksums: Dict[str, str] = Field(default_factory=dict)
-

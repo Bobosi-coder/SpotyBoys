@@ -134,6 +134,32 @@ services:
       postgres:
         condition: service_healthy
 
+  parser-export-worker:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "workers/parser-export-worker/export_delta.py"]
+    profiles: ["jobs"]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
+      SPOTIBOYS_OBJECT_STORAGE_ROOT: /object-storage
+    volumes:
+      - spotiboys-object-storage:/object-storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  artifact-refresh-worker:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "workers/artifact-refresh-worker/refresh_artifacts.py"]
+    profiles: ["jobs"]
+    environment:
+      SPOTIBOYS_OBJECT_STORAGE_ROOT: /object-storage
+    volumes:
+      - spotiboys-object-storage:/object-storage
+
   frontend-web:
     build:
       context: .
@@ -157,3 +183,4 @@ volumes:
   spotiboys-postgres:
   spotiboys-navidrome-data:
   spotiboys-fixture-music:
+  spotiboys-object-storage:
