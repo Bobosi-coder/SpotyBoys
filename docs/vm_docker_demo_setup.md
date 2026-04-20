@@ -151,6 +151,7 @@ Use the project name and VM frontend port:
 export COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
 export SPOTIBOYS_FRONTEND_PORT=8089
 export SPOTIBOYS_VM_MUSIC_ROOT=/mnt/mlflow_persist_large/music
+export SPOTIBOYS_ENABLE_REAL_RUNTIME=false
 
 docker compose \
   -f docker-compose.yml \
@@ -393,6 +394,7 @@ It does three important things:
 - skips fixture music generation
 - mounts `${SPOTIBOYS_VM_MUSIC_ROOT}` read-only into Navidrome at `/music`
 - sets `SPOTIBOYS_MEDIA_MODE=navidrome_vm_library`
+- defaults `SPOTIBOYS_ENABLE_REAL_RUNTIME=false` so the shared VM does not OOM while loading the full in-process Item2vec/co-occurrence/centroid runtime
 
 For the real mounted VM music library:
 
@@ -424,6 +426,7 @@ sudo lsof -iTCP:8089 -sTCP:LISTEN
 export COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
 export SPOTIBOYS_FRONTEND_PORT=8089
 export SPOTIBOYS_VM_MUSIC_ROOT=/mnt/mlflow_persist_large/music
+export SPOTIBOYS_ENABLE_REAL_RUNTIME=false
 docker compose -f docker-compose.yml -f docker-compose.vm-library.yml up --build -d
 
 BASE_URL=http://127.0.0.1:8089 bash infra/scripts/healthcheck_demo.sh

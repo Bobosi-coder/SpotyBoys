@@ -12,6 +12,7 @@ services:
     environment:
       SPOTIBOYS_MEDIA_MODE: navidrome_vm_library
       SPOTIBOYS_MUSIC_ROOT: /music
+      SPOTIBOYS_ENABLE_REAL_RUNTIME: ${SPOTIBOYS_ENABLE_REAL_RUNTIME:-false}
     volumes:
       - ${SPOTIBOYS_VM_MUSIC_ROOT:-/mnt/mlflow_persist_large/music}:/music:ro
       - spotiboys-serving-bundle:/serving-bundle:ro

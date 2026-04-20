@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,7 +45,8 @@ class ServingRecommendationPipeline:
         self.cooc_playlist = _load_score_file(root / "cooc_playlist.npz")
         self.centroids = _load_json_scores(root / "user_centroids.pkl")
         self.ranker_weights = _load_json(root / "gru_ranker.pt")
-        self._try_load_real_runtime(root)
+        if os.environ.get("SPOTIBOYS_ENABLE_REAL_RUNTIME", "true").strip().lower() in {"1", "true", "yes"}:
+            self._try_load_real_runtime(root)
         self.last_trace = PipelineTrace([], 0, [], False, False, [], [], [])
 
     def recommend(
