@@ -45,3 +45,9 @@ docs/*
 *.tar
 *.pth
 !fixtures/serving_bundle/**/*.pt
+
+# Ignore parquet files and markdown files except README.md
+*.parquet
+**/*.md
+!README.md
+!**/README.md
