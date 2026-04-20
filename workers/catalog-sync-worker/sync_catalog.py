@@ -54,7 +54,7 @@ def sync_catalog() -> int:
                     title=str(row["title"]),
                     artist=str(row.get("artist") or "Unknown Artist"),
                     album=str(row.get("album") or ""),
-                    duration_sec=int(float(row.get("duration_sec") or 0)),
+                    duration_sec=int(float(row.get("duration_sec") or 30)),
                     cover_art_url=str(row.get("cover_art_url") or f"/covers/{track_id}"),
                     is_playable=True,
                     navidrome_track_id=row.get("navidrome_track_id"),
