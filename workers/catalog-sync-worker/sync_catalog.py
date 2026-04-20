@@ -27,17 +27,35 @@ def sync_catalog() -> int:
     progress_every = max(1, int(os.environ.get("SPOTIBOYS_CATALOG_PROGRESS_EVERY", "500") or "500"))
     started_at = time.monotonic()
     synced = 0
-    print(f"catalog sync starting: total={total} limit={limit or 'none'}", flush=True)
+
+    already_mapped: set = set()
+    if hasattr(repository, "get_mapped_track_ids"):
+        already_mapped = repository.get_mapped_track_ids()
+    skipped = len([r for r in rows if str(r["track_id"]) in already_mapped])
+    print(
+        f"catalog sync starting: total={total} limit={limit or 'none'} "
+        f"already_mapped={len(already_mapped)} will_skip={skipped}",
+        flush=True,
+    )
+
     for index, row in enumerate(rows, start=1):
+        track_id = str(row["track_id"])
+
+        # Skip tracks already mapped — avoids Navidrome API calls on restarts.
+        if track_id in already_mapped:
+            if index == 1 or index % progress_every == 0 or index == total:
+                _print_progress(index, total, synced, started_at)
+            continue
+
         if hasattr(repository, "upsert_playable_track"):
             repository.upsert_playable_track(
                 PlayableTrackRecord(
-                    track_id=str(row["track_id"]),
+                    track_id=track_id,
                     title=str(row["title"]),
                     artist=str(row.get("artist") or "Unknown Artist"),
                     album=str(row.get("album") or ""),
                     duration_sec=int(float(row.get("duration_sec") or 0)),
-                    cover_art_url=str(row.get("cover_art_url") or f"/covers/{row['track_id']}"),
+                    cover_art_url=str(row.get("cover_art_url") or f"/covers/{track_id}"),
                     is_playable=True,
                     navidrome_track_id=row.get("navidrome_track_id"),
                     availability_status=str(row.get("availability_status", "available")),
@@ -46,10 +64,12 @@ def sync_catalog() -> int:
             )
         navidrome_track_id = _resolve_navidrome_id(config, row) or row.get("navidrome_track_id")
         if not navidrome_track_id:
+            if index == 1 or index % progress_every == 0 or index == total:
+                _print_progress(index, total, synced, started_at)
             continue
         availability = str(row.get("availability_status", "available"))
         repository.upsert_playable_mapping(
-            str(row["track_id"]),
+            track_id,
             str(navidrome_track_id),
             mapping_confidence=float(row.get("mapping_confidence", 1.0)),
             availability_status=availability,

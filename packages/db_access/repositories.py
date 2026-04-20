@@ -183,6 +183,9 @@ class DemoRepository:
     def register_active_model_version(self, model_version: str, serving_bundle_version: str, manifest_uri: str) -> None:
         return None
 
+    def get_mapped_track_ids(self) -> set:
+        return {tid for tid, t in self._tracks.items() if t.navidrome_track_id}
+
     def upsert_playable_mapping(
         self,
         track_id: str,

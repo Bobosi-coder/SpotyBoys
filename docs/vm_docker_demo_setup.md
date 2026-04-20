@@ -19,13 +19,13 @@ The VM1 serving stack includes:
 - artifact fetch worker
 - fixture music generation for local validation
 
-The stack is isolated by Compose project name. The commands below use:
+The stack is isolated by Compose project name. The `docker-compose.yml` file sets:
 
-```bash
-COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
+```yaml
+name: spotyboys_service
 ```
 
-That prefixes containers, networks, and named volumes so this setup does not reuse or remove unrelated Docker resources.
+That prefixes containers and networks so this setup does not reuse or remove unrelated Docker resources.
 
 ## Safety Rules For Shared VMs
 
@@ -145,21 +145,16 @@ browser -> nginx:8089 -> /stream/<track_id> -> recommendation-api -> internal Na
 
 ## Step 6: Start The Isolated VM Demo Stack
 
-Use the project name and VM frontend port:
+The compose file has `name: spotyboys_service` hardcoded, so no `COMPOSE_PROJECT_NAME` export is needed.
 
 ```bash
-export COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
 export SPOTIBOYS_FRONTEND_PORT=8089
-export SPOTIBOYS_VM_MUSIC_ROOT=/mnt/mlflow_persist_large/music
 export SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE=true
 
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.vm-library.yml \
-  up --build -d
+docker compose up --build -d
 ```
 
-This command does not stop unrelated containers. It only creates or updates containers in the `spotiboys_vm1_demo` Compose project.
+This command does not stop unrelated containers. It only creates or updates containers in the `spotyboys_service` Compose project.
 
 Expected external URL:
 
@@ -180,12 +175,7 @@ The first start can take time because the artifact fetch worker downloads the re
 Check status:
 
 ```bash
-export COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
-
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.vm-library.yml \
-  ps
+docker compose ps
 ```
 
 Expected long-running services:
@@ -201,17 +191,13 @@ Expected long-running services:
 Expected completed one-shot jobs:
 
 - `artifact-fetch-worker`
-- `fixture-music`
 - `navidrome-bootstrap`
 - `catalog-sync-worker`
 
 If artifact download is still running, inspect:
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.vm-library.yml \
-  logs -f artifact-fetch-worker
+docker compose logs -f artifact-fetch-worker
 ```
 
 Successful artifact fetch ends with a line similar to:
@@ -222,10 +208,9 @@ Staged active serving bundle at /serving-bundle/Real_service/active
 
 ## Step 8: Run Health Checks On Port 8089
 
-Run the health script with the isolated project name and VM base URL:
+Run the health script with the VM base URL:
 
 ```bash
-export COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
 BASE_URL=http://127.0.0.1:8089 bash infra/scripts/healthcheck_demo.sh
 ```
 
@@ -318,37 +303,25 @@ Expected active model version:
 Recommendation API:
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.vm-library.yml \
-  logs -f recommendation-api
+docker compose logs -f recommendation-api
 ```
 
 Event API:
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.vm-library.yml \
-  logs -f event-api
+docker compose logs -f event-api
 ```
 
 Navidrome:
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.vm-library.yml \
-  logs -f navidrome
+docker compose logs -f navidrome
 ```
 
 nginx ingress:
 
 ```bash
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.vm-library.yml \
-  logs -f nginx
+docker compose logs -f nginx
 ```
 
 ## Step 12: Stop Only SpotyBoys
@@ -356,46 +329,31 @@ docker compose \
 When the demo is done, stop only this isolated Compose project:
 
 ```bash
-export COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
-
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.vm-library.yml \
-  down
+docker compose down
 ```
 
-This stops only containers in the `spotiboys_vm1_demo` project.
+This stops only containers in the `spotyboys_service` project (hardcoded via `name:` in docker-compose.yml).
 
 To preserve downloaded models and database state, do not pass `-v`.
 
-To reset only SpotyBoys demo state later:
+To reset only SpotyBoys demo state (wipes all volumes — use with caution):
 
 ```bash
-export COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
-
-docker compose \
-  -f docker-compose.yml \
-  -f docker-compose.vm-library.yml \
-  down -v
+docker compose down -v
 ```
 
-Use `down -v` only when you intentionally want to remove the SpotyBoys project volumes.
+Use `down -v` only when you intentionally want to wipe the SpotyBoys volumes. Since all data directories are bind-mounted to `/mnt/mlflow_persist/spotiboys/`, `down -v` has no effect on them — the data on disk is preserved. To truly reset you would need to manually remove those directories.
 
 ## VM Library Mode Notes
 
-The VM demo path validates the serving stack with the real VM music mount and real remote model artifacts. The VM library override file is:
+The VM demo path validates the serving stack with the real VM music mount and real remote model artifacts. VM library settings are baked directly into `docker-compose.yml` — there is no separate overlay file.
 
-```text
-docker-compose.vm-library.yml
-```
+Key settings in docker-compose.yml:
 
-It does three important things:
-
-- skips fixture music generation
-- mounts `${SPOTIBOYS_VM_MUSIC_ROOT}` read-only into Navidrome at `/music`
-- sets `SPOTIBOYS_MEDIA_MODE=navidrome_vm_library`
-- requires the full C1-C4 serving path with `SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE=true`
-- builds the playable canonical catalog from `/music/manifest.csv` when present, otherwise from audio filenames
+- `SPOTIBOYS_MEDIA_MODE=navidrome_vm_library` on recommendation-api and catalog-sync-worker
+- music mounted read-only from `/mnt/mlflow_persist_large/music` into Navidrome at `/music`
+- all data directories bind-mounted under `/mnt/mlflow_persist/spotiboys/` on persistent block storage
+- no fixture-music service (real music library is used directly)
 
 For the real mounted VM music library:
 
@@ -425,11 +383,9 @@ nano .env
 
 sudo lsof -iTCP:8089 -sTCP:LISTEN
 
-export COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
 export SPOTIBOYS_FRONTEND_PORT=8089
-export SPOTIBOYS_VM_MUSIC_ROOT=/mnt/mlflow_persist_large/music
 export SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE=true
-docker compose -f docker-compose.yml -f docker-compose.vm-library.yml up --build -d
+docker compose up --build -d
 
 BASE_URL=http://127.0.0.1:8089 bash infra/scripts/healthcheck_demo.sh
 ```

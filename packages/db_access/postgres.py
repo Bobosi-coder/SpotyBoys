@@ -225,6 +225,15 @@ class PostgresRepository:
                     (model_version, serving_bundle_version, manifest_uri),
                 )
 
+    def get_mapped_track_ids(self) -> set:
+        """Return the set of track_ids that already have a navidrome mapping."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT track_id FROM app.navidrome_track_mapping WHERE navidrome_track_id IS NOT NULL"
+                )
+                return {row[0] for row in cur.fetchall()}
+
     def upsert_playable_mapping(
         self,
         track_id: str,
