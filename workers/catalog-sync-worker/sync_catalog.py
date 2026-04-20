@@ -6,6 +6,7 @@ import os
 import time
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 from packages.config import load_config
@@ -27,11 +28,18 @@ def sync_catalog() -> int:
     progress_every = max(1, int(os.environ.get("SPOTIBOYS_CATALOG_PROGRESS_EVERY", "500") or "500"))
     started_at = time.monotonic()
     synced = 0
+    missing_required = 0
+    quarantine_rows = 0
+    duplicate_track_ids = 0
+    mapping_failures = 0
 
     already_mapped: set = set()
     if hasattr(repository, "get_mapped_track_ids"):
         already_mapped = repository.get_mapped_track_ids()
     skipped = len([r for r in rows if str(r["track_id"]) in already_mapped])
+    duplicate_track_ids = _count_duplicate_track_ids(rows)
+    missing_required = _count_missing_required_rows(rows)
+    quarantine_rows = sum(1 for row in rows if row.get("quarantine_reason"))
     print(
         f"catalog sync starting: total={total} limit={limit or 'none'} "
         f"already_mapped={len(already_mapped)} will_skip={skipped}",
@@ -64,6 +72,7 @@ def sync_catalog() -> int:
             )
         navidrome_track_id = _resolve_navidrome_id(config, row) or row.get("navidrome_track_id")
         if not navidrome_track_id:
+            mapping_failures += 1
             if index == 1 or index % progress_every == 0 or index == total:
                 _print_progress(index, total, synced, started_at)
             continue
@@ -78,6 +87,15 @@ def sync_catalog() -> int:
         synced += 1
         if index == 1 or index % progress_every == 0 or index == total:
             _print_progress(index, total, synced, started_at)
+    report = _build_ingestion_quality_report(
+        total_rows=total,
+        missing_required=missing_required,
+        duplicate_track_ids=duplicate_track_ids,
+        mapped_rows=synced + skipped,
+        quarantine_rows=quarantine_rows,
+    )
+    report_path = _write_quality_report(config.object_storage_root, "ingestion", report)
+    print(f"catalog sync quality report written to {report_path}", flush=True)
     return synced
 
 
@@ -103,6 +121,79 @@ def _format_seconds(seconds: int) -> str:
     minutes, sec = divmod(max(0, seconds), 60)
     hours, minutes = divmod(minutes, 60)
     return f"{hours:02d}:{minutes:02d}:{sec:02d}"
+
+
+def _count_missing_required_rows(rows: list[dict]) -> int:
+    required = ("track_id", "title", "artist")
+    missing = 0
+    for row in rows:
+        if any(not str(row.get(key, "")).strip() for key in required):
+            missing += 1
+    return missing
+
+
+def _count_duplicate_track_ids(rows: list[dict]) -> int:
+    seen: set[str] = set()
+    duplicates = 0
+    for row in rows:
+        track_id = str(row.get("track_id", "")).strip()
+        if not track_id:
+            continue
+        if track_id in seen:
+            duplicates += 1
+            continue
+        seen.add(track_id)
+    return duplicates
+
+
+def _build_ingestion_quality_report(
+    *,
+    total_rows: int,
+    missing_required: int,
+    duplicate_track_ids: int,
+    mapped_rows: int,
+    quarantine_rows: int,
+) -> dict:
+    total = max(total_rows, 1)
+    metrics = {
+        "total_rows": total_rows,
+        "missing_required_rate": missing_required / total,
+        "duplicate_track_id_rate": duplicate_track_ids / total,
+        "mapping_success_rate": mapped_rows / total,
+        "quarantine_rate": quarantine_rows / total,
+    }
+    thresholds = {
+        "missing_required_rate_max": 0.01,
+        "duplicate_track_id_rate_max": 0.01,
+        "mapping_success_rate_min": 0.90,
+        "quarantine_rate_max": 0.10,
+    }
+    notes: list[str] = []
+    if metrics["missing_required_rate"] > thresholds["missing_required_rate_max"]:
+        notes.append("missing_required_rate exceeded threshold")
+    if metrics["duplicate_track_id_rate"] > thresholds["duplicate_track_id_rate_max"]:
+        notes.append("duplicate_track_id_rate exceeded threshold")
+    if metrics["mapping_success_rate"] < thresholds["mapping_success_rate_min"]:
+        notes.append("mapping_success_rate fell below threshold")
+    if metrics["quarantine_rate"] > thresholds["quarantine_rate_max"]:
+        notes.append("quarantine_rate exceeded threshold")
+    return {
+        "stage": "ingestion",
+        "status": "fail" if notes else "ok",
+        "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "metrics": metrics,
+        "thresholds": thresholds,
+        "notes": notes,
+    }
+
+
+def _write_quality_report(root: Path, stage: str, payload: dict) -> Path:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    report_dir = root / "quality_reports" / stage
+    report_dir.mkdir(parents=True, exist_ok=True)
+    path = report_dir / f"{stamp}.json"
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    return path
 
 
 def _catalog_rows(config) -> list[dict]:

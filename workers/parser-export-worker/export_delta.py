@@ -113,6 +113,12 @@ def export_delta(version: str | None = None) -> Path:
             json.dumps(manifest, indent=2) + "\n", encoding="utf-8"
         )
 
+        quality_report = validate_exported_delta_quality(output)
+        (output / "quality_report.json").write_text(
+            json.dumps(quality_report, indent=2) + "\n",
+            encoding="utf-8",
+        )
+
         repo.record_delta_export_success(stamp, last_int_id, row_counts)
 
         _upload_delta_to_s3(output, stamp)
@@ -140,6 +146,70 @@ def _write_parquet(path: Path, columns: List[str], rows: List[Tuple[Any, ...]]) 
     }
     pq.write_table(pa.Table.from_pydict(payload), path)
     return len(rows)
+
+
+def validate_exported_delta_quality(output_dir: Path) -> Dict[str, Any]:
+    import pyarrow.parquet as pq
+
+    session_tracks = output_dir / "session_tracks_addition.parquet"
+    session_meta = output_dir / "session_meta_addition.parquet"
+    love = output_dir / "love_addition.parquet"
+    users = output_dir / "users_addition.parquet"
+
+    session_tracks_table = pq.read_table(session_tracks)
+    session_meta_table = pq.read_table(session_meta)
+    love_table = pq.read_table(love)
+    users_table = pq.read_table(users)
+
+    label_counts = {"positive": 0, "neutral": 0, "skip": 0}
+    labels = session_tracks_table.column("label").to_pylist() if "label" in session_tracks_table.column_names else []
+    for label in labels:
+        if label in label_counts:
+            label_counts[str(label)] += 1
+
+    session_track_rows = session_tracks_table.num_rows
+    total_labels = max(session_track_rows, 1)
+    user_ids = session_tracks_table.column("user_id").to_pylist() if "user_id" in session_tracks_table.column_names else []
+    track_ids = session_tracks_table.column("track_id").to_pylist() if "track_id" in session_tracks_table.column_names else []
+
+    metrics = {
+        "session_tracks_rows": session_track_rows,
+        "session_meta_rows": session_meta_table.num_rows,
+        "love_rows": love_table.num_rows,
+        "users_rows": users_table.num_rows,
+        "positive_label_rate": label_counts["positive"] / total_labels,
+        "neutral_label_rate": label_counts["neutral"] / total_labels,
+        "skip_label_rate": label_counts["skip"] / total_labels,
+        "unique_user_count": len(set(user_ids)),
+        "unique_track_count": len(set(track_ids)),
+    }
+    thresholds = {
+        "session_tracks_rows_min": 1,
+        "session_meta_rows_min": 1,
+        "users_rows_min": 1,
+        "positive_label_rate_min": 0.05,
+        "skip_label_rate_max": 0.95,
+    }
+    notes: list[str] = []
+    if metrics["session_tracks_rows"] < thresholds["session_tracks_rows_min"]:
+        notes.append("session_tracks_rows below threshold")
+    if metrics["session_meta_rows"] < thresholds["session_meta_rows_min"]:
+        notes.append("session_meta_rows below threshold")
+    if metrics["users_rows"] < thresholds["users_rows_min"]:
+        notes.append("users_rows below threshold")
+    if metrics["positive_label_rate"] < thresholds["positive_label_rate_min"]:
+        notes.append("positive_label_rate below threshold")
+    if metrics["skip_label_rate"] > thresholds["skip_label_rate_max"]:
+        notes.append("skip_label_rate exceeded threshold")
+
+    return {
+        "stage": "retraining_dataset",
+        "status": "fail" if notes else "ok",
+        "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "metrics": metrics,
+        "thresholds": thresholds,
+        "notes": notes,
+    }
 
 
 def _export_session_tracks(

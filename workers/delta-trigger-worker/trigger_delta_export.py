@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import sys
+import json
+from pathlib import Path
 from typing import Optional
 
 from packages.airflow_trigger import trigger_airflow_retrain
@@ -53,6 +55,19 @@ def check_and_trigger_delta_export(threshold: int = 1000) -> Optional[str]:
 
         result = export_delta()
         logger.info(f"Delta export completed: {result}")
+
+        quality_report_path = Path(result) / "quality_report.json"
+        if quality_report_path.exists():
+            quality_report = json.loads(quality_report_path.read_text(encoding="utf-8"))
+            if quality_report.get("status") == "fail":
+                logger.warning(
+                    "Delta export quality gate failed; retraining will not be triggered. "
+                    f"notes={quality_report.get('notes', [])}"
+                )
+                return str(result)
+        else:
+            logger.warning("Delta export quality report missing; retraining will not be triggered.")
+            return str(result)
 
         try:
             dag_run = trigger_airflow_retrain()
