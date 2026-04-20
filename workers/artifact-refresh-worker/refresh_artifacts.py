@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -8,6 +9,9 @@ from typing import Optional
 
 from packages.artifact_runtime import validate_serving_bundle_directory
 from packages.config import load_config
+
+
+ACTIVE_ARTIFACT_ROOT = Path(os.environ.get("SPOTIBOYS_ACTIVE_ARTIFACT_ROOT", "/serving-bundle"))
 
 
 def refresh_artifacts(version: Optional[str] = None) -> Path:
@@ -22,7 +26,7 @@ def refresh_artifacts(version: Optional[str] = None) -> Path:
     real_service_root = config.object_storage_root / "proj23-mlflow-artifacts" / "Real_service"
     source = _select_bundle(real_service_root, version)
     manifest = validate_serving_bundle_directory(source)
-    staged_root = config.object_storage_root / "vm1_staged_serving" / "Real_service"
+    staged_root = ACTIVE_ARTIFACT_ROOT / "Real_service" / "vm1_staged_serving"
     destination = staged_root / str(manifest["version"])
     if destination.exists():
         shutil.rmtree(destination)

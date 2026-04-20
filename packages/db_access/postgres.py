@@ -87,7 +87,7 @@ class PostgresRepository:
                     )
 
     def ensure_auth_schema(self) -> None:
-        """Apply additive auth/session guards for existing demo volumes."""
+        """Apply additive guards for existing demo volumes (idempotent)."""
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute("ALTER TABLE app.users ADD COLUMN IF NOT EXISTS email TEXT")
@@ -116,6 +116,47 @@ class PostgresRepository:
                     """
                     CREATE INDEX IF NOT EXISTS idx_app_auth_sessions_user
                     ON app.auth_sessions(user_id, created_at DESC)
+                    """
+                )
+
+                # Integer surrogate IDs for ML pipeline delta export (005_int_id_mapping.sql)
+                cur.execute("ALTER TABLE app.users ADD COLUMN IF NOT EXISTS user_int_id BIGINT")
+                cur.execute("CREATE SEQUENCE IF NOT EXISTS app_user_int_seq START 100000")
+                cur.execute(
+                    "UPDATE app.users SET user_int_id = nextval('app_user_int_seq') WHERE user_int_id IS NULL"
+                )
+                cur.execute(
+                    "ALTER TABLE app.users ALTER COLUMN user_int_id SET DEFAULT nextval('app_user_int_seq')"
+                )
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_app_users_user_int_id ON app.users (user_int_id)"
+                )
+
+                cur.execute("ALTER TABLE app.sessions ADD COLUMN IF NOT EXISTS session_int_id BIGINT")
+                cur.execute("CREATE SEQUENCE IF NOT EXISTS app_session_int_seq START 3000000")
+                cur.execute(
+                    "UPDATE app.sessions SET session_int_id = nextval('app_session_int_seq') WHERE session_int_id IS NULL"
+                )
+                cur.execute(
+                    "ALTER TABLE app.sessions ALTER COLUMN session_int_id SET DEFAULT nextval('app_session_int_seq')"
+                )
+                cur.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_app_sessions_session_int_id ON app.sessions (session_int_id)"
+                )
+
+                cur.execute(
+                    """
+                    DO $$
+                    BEGIN
+                        IF EXISTS (
+                            SELECT 1 FROM information_schema.tables
+                            WHERE table_schema = 'app'
+                              AND table_name = 'delta_export_metadata'
+                        ) THEN
+                            ALTER TABLE app.delta_export_metadata
+                                ADD COLUMN IF NOT EXISTS last_exported_session_int_id BIGINT;
+                        END IF;
+                    END $$
                     """
                 )
 
@@ -522,6 +563,109 @@ class PostgresRepository:
             with conn.cursor() as cur:
                 cur.execute(f"SELECT COUNT(*) FROM app.{table_name}")
                 return int(cur.fetchone()[0])
+
+    def count_new_sessions_since_checkpoint(self) -> int:
+        """Count sessions accumulated since the last completed export checkpoint."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT last_exported_session_int_id
+                    FROM app.delta_export_metadata
+                    WHERE status = 'completed'
+                    ORDER BY completed_at DESC
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+                last_int_id = row[0] if row else None
+
+                if last_int_id is not None:
+                    cur.execute(
+                        "SELECT COUNT(*) FROM app.sessions WHERE session_int_id > %s",
+                        (last_int_id,),
+                    )
+                else:
+                    cur.execute("SELECT COUNT(*) FROM app.sessions WHERE session_int_id IS NOT NULL")
+
+                return int(cur.fetchone()[0])
+
+    def get_checkpoint_session_int_id(self) -> Optional[int]:
+        """Return the session_int_id high-water mark from the last completed export."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT last_exported_session_int_id
+                    FROM app.delta_export_metadata
+                    WHERE status = 'completed'
+                    ORDER BY completed_at DESC
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+    def get_max_session_int_id(self) -> Optional[int]:
+        """Return the current maximum session_int_id across all sessions."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT MAX(session_int_id) FROM app.sessions")
+                row = cur.fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+    def record_delta_export_start(self, delta_version: str) -> None:
+        """Record delta export start (status='in_progress')."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.delta_export_metadata
+                        (delta_version, status, row_counts)
+                    VALUES (%s, 'in_progress', '{}')
+                    ON CONFLICT (delta_version) DO UPDATE SET
+                        status = 'in_progress',
+                        created_at = NOW()
+                    """,
+                    (delta_version,)
+                )
+
+    def record_delta_export_success(
+        self,
+        delta_version: str,
+        last_exported_session_int_id: Optional[int],
+        row_counts: Dict[str, int],
+    ) -> None:
+        """Record delta export success (status='completed')."""
+        import json
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE app.delta_export_metadata
+                    SET status = 'completed',
+                        last_exported_session_int_id = %s,
+                        row_counts = %s,
+                        completed_at = NOW()
+                    WHERE delta_version = %s
+                    """,
+                    (last_exported_session_int_id, json.dumps(row_counts), delta_version),
+                )
+
+    def record_delta_export_failure(self, delta_version: str, error: str) -> None:
+        """Record delta export failure (status='failed')."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE app.delta_export_metadata
+                    SET status = 'failed',
+                        error_message = %s,
+                        completed_at = NOW()
+                    WHERE delta_version = %s
+                    """,
+                    (error, delta_version)
+                )
 
     @staticmethod
     def _record_from_row(row: Iterable[Any]) -> PlayableTrackRecord:

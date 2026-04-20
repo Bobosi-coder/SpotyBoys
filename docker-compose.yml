@@ -1,3 +1,5 @@
+name: spotyboys_service
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -7,7 +9,7 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - ./db:/docker-entrypoint-initdb.d:ro
-      - spotiboys-postgres:/var/lib/postgresql/data
+      - /mnt/mlflow_persist/spotiboys/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d spotiboys"]
       interval: 5s
@@ -22,26 +24,14 @@ services:
       timeout: 3s
       retries: 12
 
-  fixture-music:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
-    command: ["python", "infra/scripts/generate_fixture_music.py", "--fixture", "/app/fixtures/demo_catalog.json", "--output-dir", "/music", "--source-root", "/app/data/raw/audio_previews"]
-    volumes:
-      - spotiboys-fixture-music:/music
-      - ./data/raw/audio_previews:/app/data/raw/audio_previews:ro
-
   navidrome:
     image: deluan/navidrome:latest
     environment:
       ND_SCANSCHEDULE: "1m"
       ND_LOGLEVEL: info
     volumes:
-      - spotiboys-navidrome-data:/data
-      - spotiboys-fixture-music:/music:ro
-    depends_on:
-      fixture-music:
-        condition: service_completed_successfully
+      - /mnt/mlflow_persist/spotiboys/navidrome:/data
+      - /mnt/mlflow_persist_large/music:/music:ro
     expose:
       - "4533"
 
@@ -64,19 +54,18 @@ services:
       dockerfile: apps/recommendation-api/Dockerfile
     environment:
       SPOTIBOYS_RUNTIME_MODE: postgres
-      SPOTIBOYS_MEDIA_MODE: navidrome_fixture
+      SPOTIBOYS_MEDIA_MODE: navidrome_vm_library
       SPOTIBOYS_MUSIC_ROOT: /music
       SPOTIBOYS_SERVING_BUNDLE_PATH: /serving-bundle/Real_service/active
       SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE: ${SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE:-true}
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
       REDIS_URL: redis://redis:6379/0
-      SPOTIBOYS_FIXTURE_PATH: /app/fixtures/demo_catalog.json
       NAVIDROME_BASE_URL: http://navidrome:4533
       NAVIDROME_USERNAME: spotiboys
       NAVIDROME_PASSWORD: spotiboys
     volumes:
-      - spotiboys-fixture-music:/music:ro
-      - spotiboys-serving-bundle:/serving-bundle:ro
+      - /mnt/mlflow_persist_large/music:/music:ro
+      - /mnt/mlflow_persist/spotiboys/serving-bundle:/serving-bundle:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,7 +86,6 @@ services:
       SPOTIBOYS_RUNTIME_MODE: postgres
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
       REDIS_URL: redis://redis:6379/0
-      SPOTIBOYS_FIXTURE_PATH: /app/fixtures/demo_catalog.json
     depends_on:
       postgres:
         condition: service_healthy
@@ -113,13 +101,15 @@ services:
       SPOTIBOYS_RUNTIME_MODE: postgres
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
       REDIS_URL: redis://redis:6379/0
-      SPOTIBOYS_FIXTURE_PATH: /app/fixtures/demo_catalog.json
-      SPOTIBOYS_MEDIA_MODE: navidrome_fixture
+      SPOTIBOYS_MEDIA_MODE: navidrome_vm_library
+      SPOTIBOYS_MUSIC_ROOT: /music
       SPOTIBOYS_CATALOG_PROGRESS_EVERY: ${SPOTIBOYS_CATALOG_PROGRESS_EVERY:-500}
       SPOTIBOYS_CATALOG_SYNC_LIMIT: ${SPOTIBOYS_CATALOG_SYNC_LIMIT:-0}
       NAVIDROME_BASE_URL: http://navidrome:4533
       NAVIDROME_USERNAME: spotiboys
       NAVIDROME_PASSWORD: spotiboys
+    volumes:
+      - /mnt/mlflow_persist_large/music:/music:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -150,7 +140,7 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
       SPOTIBOYS_OBJECT_STORAGE_ROOT: /object-storage
     volumes:
-      - spotiboys-object-storage:/object-storage
+      - /mnt/mlflow_persist/spotiboys/object-storage:/object-storage
     depends_on:
       postgres:
         condition: service_healthy
@@ -163,8 +153,10 @@ services:
     profiles: ["jobs"]
     environment:
       SPOTIBOYS_OBJECT_STORAGE_ROOT: /object-storage
+      SPOTIBOYS_ACTIVE_ARTIFACT_ROOT: /serving-bundle
     volumes:
-      - spotiboys-object-storage:/object-storage
+      - /mnt/mlflow_persist/spotiboys/object-storage:/object-storage
+      - /mnt/mlflow_persist/spotiboys/serving-bundle:/serving-bundle
 
   artifact-fetch-worker:
     build:
@@ -181,8 +173,39 @@ services:
       SPOTIBOYS_OBJECT_STORAGE_ROOT: /object-storage
       SPOTIBOYS_ACTIVE_ARTIFACT_ROOT: /serving-bundle
     volumes:
-      - spotiboys-object-storage:/object-storage
-      - spotiboys-serving-bundle:/serving-bundle
+      - /mnt/mlflow_persist/spotiboys/object-storage:/object-storage
+      - /mnt/mlflow_persist/spotiboys/serving-bundle:/serving-bundle
+
+  delta-trigger-worker:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "workers/delta-trigger-worker/trigger_delta_export.py"]
+    profiles: ["jobs"]
+    environment:
+      SPOTIBOYS_RUNTIME_MODE: postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
+      SPOTIBOYS_OBJECT_STORAGE_ROOT: /object-storage
+    volumes:
+      - /mnt/mlflow_persist/spotiboys/object-storage:/object-storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  restart-monitor-worker:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "workers/restart-monitor-worker/monitor_restart.py"]
+    profiles: ["jobs"]
+    environment:
+      SPOTIBOYS_ACTIVE_ARTIFACT_ROOT: /serving-bundle
+      RECOMMENDATION_API_CONTAINER: spotyboys_service-recommendation-api-1
+    volumes:
+      - /mnt/mlflow_persist/spotiboys/serving-bundle:/serving-bundle
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - recommendation-api
 
   frontend-web:
     build:
@@ -195,17 +218,10 @@ services:
   nginx:
     image: nginx:1.25-alpine
     ports:
-      - "${SPOTIBOYS_FRONTEND_PORT:-5173}:80"
+      - "${SPOTIBOYS_FRONTEND_PORT:-8089}:80"
     volumes:
       - ./infra/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
       - recommendation-api
       - event-api
       - frontend-web
-
-volumes:
-  spotiboys-postgres:
-  spotiboys-navidrome-data:
-  spotiboys-fixture-music:
-  spotiboys-object-storage:
-  spotiboys-serving-bundle:
