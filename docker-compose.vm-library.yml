@@ -20,3 +20,6 @@ services:
   catalog-sync-worker:
     environment:
       SPOTIBOYS_MEDIA_MODE: navidrome_vm_library
+      SPOTIBOYS_MUSIC_ROOT: /music
+    volumes:
+      - ${SPOTIBOYS_VM_MUSIC_ROOT:-/mnt/mlflow_persist_large/music}:/music:ro
