@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -10,14 +11,27 @@ from packages.config import load_config
 
 def bootstrap_navidrome() -> None:
     config = load_config()
-    if _ping(config.navidrome_base_url, config.navidrome_username, config.navidrome_password):
-        print("Navidrome Subsonic user already works")
-        return
-    payload = json.dumps(
-        {"username": config.navidrome_username, "password": config.navidrome_password}
-    ).encode("utf-8")
+    deadline = time.monotonic() + 180
+    last_error = ""
+    while time.monotonic() < deadline:
+        if _ping(config.navidrome_base_url, config.navidrome_username, config.navidrome_password):
+            print("Navidrome Subsonic user already works")
+            return
+        try:
+            _create_admin(config.navidrome_base_url, config.navidrome_username, config.navidrome_password)
+        except Exception as exc:
+            last_error = str(exc)
+        if _ping(config.navidrome_base_url, config.navidrome_username, config.navidrome_password):
+            print("Navidrome Subsonic user bootstrapped")
+            return
+        time.sleep(5)
+    raise RuntimeError(f"Navidrome Subsonic credentials are not usable after bootstrap: {last_error}")
+
+
+def _create_admin(base_url: str, username: str, password: str) -> None:
+    payload = json.dumps({"username": username, "password": password}).encode("utf-8")
     request = urllib.request.Request(
-        f"{config.navidrome_base_url}/auth/createAdmin",
+        f"{base_url}/auth/createAdmin",
         data=payload,
         headers={"Content-Type": "application/json"},
         method="POST",
@@ -29,9 +43,6 @@ def bootstrap_navidrome() -> None:
     except urllib.error.HTTPError as exc:
         if exc.code not in {400, 409, 500}:
             raise
-    if not _ping(config.navidrome_base_url, config.navidrome_username, config.navidrome_password):
-        raise RuntimeError("Navidrome Subsonic credentials are not usable after bootstrap")
-    print("Navidrome Subsonic user bootstrapped")
 
 
 def _ping(base_url: str, username: str, password: str) -> bool:
