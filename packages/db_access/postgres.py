@@ -197,6 +197,14 @@ class PostgresRepository:
             with conn.cursor() as cur:
                 cur.execute(
                     """
+                    DELETE FROM app.navidrome_track_mapping
+                    WHERE navidrome_track_id = %s
+                      AND track_id <> %s
+                    """,
+                    (navidrome_track_id, track_id),
+                )
+                cur.execute(
+                    """
                     UPDATE app.playable_tracks
                     SET is_playable = %s,
                         availability_status = %s,
