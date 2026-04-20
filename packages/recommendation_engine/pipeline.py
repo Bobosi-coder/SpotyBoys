@@ -162,8 +162,7 @@ class ServingRecommendationPipeline:
             if self.require_full_runtime:
                 raise RuntimeError(f"Full C1-C4 ML pipeline recommendation failed: {type(exc).__name__}: {exc}") from exc
             return None
-        output: List[PlayableTrackRecord] = []
-        seen_artists: Dict[str, int] = {}
+        ranked_tracks: List[PlayableTrackRecord] = []
         for track_id, _score in ranked:
             key = str(track_id)
             if key in disliked_track_ids or key in recent_track_ids:
@@ -171,13 +170,8 @@ class ServingRecommendationPipeline:
             track = playable_by_id.get(key)
             if not track:
                 continue
-            artist_count = seen_artists.get(track.artist, 0)
-            if artist_count > 1:
-                continue
-            output.append(track)
-            seen_artists[track.artist] = artist_count + 1
-            if len(output) >= 18:
-                break
+            ranked_tracks.append(track)
+        output = _diversify_tracks_by_artist(ranked_tracks, limit=18)
         if not output:
             if self.require_full_runtime:
                 return []
@@ -282,7 +276,46 @@ class ServingRecommendationPipeline:
             artist_counts[item.track.artist] = artist_counts.get(item.track.artist, 0) + 1
         if not output:
             return list(ranked)
-        return sorted(output, key=lambda item: (-item.policy_score, item.track.track_id))
+        return _diversify_candidates_by_artist(sorted(output, key=lambda item: (-item.policy_score, item.track.track_id)))
+
+
+def _artist_key(artist: str) -> str:
+    return (artist or "unknown artist").strip().casefold()
+
+
+def _diversify_tracks_by_artist(tracks: Sequence[PlayableTrackRecord], *, limit: int) -> List[PlayableTrackRecord]:
+    primary: List[PlayableTrackRecord] = []
+    overflow: List[PlayableTrackRecord] = []
+    seen_artists: set[str] = set()
+    for track in tracks:
+        key = _artist_key(track.artist)
+        if key not in seen_artists:
+            primary.append(track)
+            seen_artists.add(key)
+        else:
+            overflow.append(track)
+        if len(primary) >= limit:
+            return primary
+    for track in overflow:
+        if len(primary) >= limit:
+            break
+        primary.append(track)
+    return primary
+
+
+def _diversify_candidates_by_artist(candidates: Sequence[Candidate]) -> List[Candidate]:
+    primary: List[Candidate] = []
+    overflow: List[Candidate] = []
+    seen_artists: set[str] = set()
+    for candidate in candidates:
+        key = _artist_key(candidate.track.artist)
+        if key not in seen_artists:
+            primary.append(candidate)
+            seen_artists.add(key)
+        else:
+            overflow.append(candidate)
+    primary.extend(overflow)
+    return primary
 
 
 def _load_score_file(path: Path) -> Dict[str, float]:

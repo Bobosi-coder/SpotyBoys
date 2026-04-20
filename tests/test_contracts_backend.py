@@ -17,8 +17,10 @@ from packages.auth import (
 )
 from packages.config import AppConfig
 from packages.db_access.demo_bootstrap import reset_demo_components
+from packages.db_access.repositories import PlayableTrackRecord
 from packages.navidrome_adapter import MediaAccessService
 from packages.recommendation_engine import RecommendationService
+from packages.recommendation_engine.pipeline import _diversify_tracks_by_artist
 from packages.shared_contracts.enums import BrowseSurfaceSlot, PlaybackEventType
 from packages.shared_contracts.manifests import (
     validate_delta_manifest,
@@ -226,6 +228,16 @@ class BackendContractTests(unittest.TestCase):
         self.assertEqual(self.runtime.recent_track_ids("sess_queue_not_recent"), [])
         self.runtime.append_recent_track("sess_queue_not_recent", first.queue.items[0].track_id)
         self.assertEqual(self.runtime.recent_track_ids("sess_queue_not_recent"), [first.queue.items[0].track_id])
+
+    def test_artist_diversity_prioritizes_unique_artists(self) -> None:
+        tracks = [
+            PlayableTrackRecord("a1", "A1", "Same Artist", "", 1, "", True, "nav_a1"),
+            PlayableTrackRecord("a2", "A2", "Same Artist", "", 1, "", True, "nav_a2"),
+            PlayableTrackRecord("b1", "B1", "Different Artist", "", 1, "", True, "nav_b1"),
+            PlayableTrackRecord("c1", "C1", "Third Artist", "", 1, "", True, "nav_c1"),
+        ]
+        diversified = _diversify_tracks_by_artist(tracks, limit=3)
+        self.assertEqual([track.track_id for track in diversified], ["a1", "b1", "c1"])
 
     def test_dislike_feedback_changes_future_policy_filtering(self) -> None:
         first = self.recommender.recommend_next(RecommendationRequest(session_id="sess_dislike", user_id="user_demo"))

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>SpotiBoys</title>
-    <link rel="stylesheet" href="./src/styles.css?v=iteration4-auth-3" />
+    <link rel="stylesheet" href="./src/styles.css?v=iteration4-playback-1" />
   </head>
   <body>
     <main class="stage">
@@ -28,7 +28,7 @@
           <div id="status" class="status hidden" data-testid="status-banner"></div>
           <section class="featured-wrap">
             <div class="section-heading">
-              <p>Featured</p>
+              <p>Recommended Songs</p>
               <span id="model-version"></span>
             </div>
             <div id="featured" class="featured-grid" data-testid="featured-recommendations"></div>
@@ -61,7 +61,6 @@
             <button id="skip-back" class="dock-button" aria-label="Skip back">&lt;&lt;</button>
             <button id="play-pause" class="dock-button primary" aria-label="Play or pause">Play</button>
             <button id="skip-next" class="dock-button" aria-label="Skip next">&gt;&gt;</button>
-            <button id="playlist-button" class="dock-button" aria-label="Open playlist" data-testid="playlist-button">List</button>
           </div>
           <audio id="audio-player" preload="none"></audio>
         </footer>
@@ -73,6 +72,6 @@
         window.SPOTIBOYS_EVENT_API = location.origin;
       }
     </script>
-    <script src="./src/app.js?v=iteration4-auth-3"></script>
+    <script src="./src/app.js?v=iteration4-playback-1"></script>
   </body>
 </html>

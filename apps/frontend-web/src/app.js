@@ -27,7 +27,6 @@ const els = {
   random: document.getElementById("random-carousel"),
   drawer: document.getElementById("playlist-drawer"),
   queue: document.getElementById("queue-list"),
-  playlistButton: document.getElementById("playlist-button"),
   closeDrawer: document.getElementById("close-drawer"),
   playPause: document.getElementById("play-pause"),
   skipNext: document.getElementById("skip-next"),
@@ -210,9 +209,11 @@ async function startTrack(item) {
   try {
     const playable = await fetchJson(apiUrl(recommendationBase, `/playable-track/${item.track_id}`));
     els.audio.src = apiUrl(recommendationBase, playable.stream_path);
+    updatePlayPauseButton();
     await els.audio.play();
   } catch (error) {
     showStatus("Selected track could not start. Moving to the next approved playable item.");
+    updatePlayPauseButton();
   }
 }
 
@@ -334,6 +335,11 @@ async function playNextFromQueue() {
   await refreshRecommendations({ autoplayFirst: true });
 }
 
+function updatePlayPauseButton() {
+  els.playPause.textContent = els.audio.paused ? "Play" : "Pause";
+  els.playPause.setAttribute("aria-label", els.audio.paused ? "Play" : "Pause");
+}
+
 function showStatus(message) {
   els.status.textContent = message;
   els.status.classList.remove("hidden");
@@ -349,7 +355,6 @@ function escapeHtml(value) {
   }[ch]));
 }
 
-els.playlistButton.addEventListener("click", () => toggleDrawer(!state.drawerOpen));
 els.closeDrawer.addEventListener("click", () => toggleDrawer(false));
 els.playPause.addEventListener("click", () => {
   if (els.audio.paused && state.currentTrack) {
@@ -359,6 +364,7 @@ els.playPause.addEventListener("click", () => {
   } else {
     els.audio.pause();
   }
+  updatePlayPauseButton();
 });
 els.skipNext.addEventListener("click", async () => {
   await emitPlaybackLifecycle("skip").catch(() => showStatus("Skip logged locally while event service recovers."));
@@ -385,11 +391,15 @@ els.logout.addEventListener("click", async () => {
   state.browseSurface = { featured_items: [], random_carousel_items: [] };
   els.audio.pause();
   els.audio.removeAttribute("src");
+  updatePlayPauseButton();
   renderAll();
   showAuth(true);
 });
 els.audio.addEventListener("playing", emitPlaybackStartOnce);
+els.audio.addEventListener("play", updatePlayPauseButton);
+els.audio.addEventListener("pause", updatePlayPauseButton);
 els.audio.addEventListener("ended", async () => {
+  updatePlayPauseButton();
   await emitPlaybackLifecycle("complete").catch(() => showStatus("Completion logging is degraded."));
   await playNextFromQueue();
 });

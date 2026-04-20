@@ -30,13 +30,21 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('class="playlist-drawer"', INDEX)
         self.assertIn('aria-hidden="true"', INDEX)
         self.assertIn("state.drawerOpen = false", APP_JS)
-        self.assertIn("toggleDrawer(!state.drawerOpen)", APP_JS)
         self.assertIn("before !== after", APP_JS)
 
     def test_bottom_dock_primary_controls(self) -> None:
-        for control in ["skip-back", "play-pause", "skip-next", "playlist-button"]:
+        for control in ["skip-back", "play-pause", "skip-next"]:
             self.assertIn(f'id="{control}"', INDEX)
-        self.assertEqual(INDEX.count('class="dock-button'), 4)
+        self.assertNotIn('id="playlist-button"', INDEX)
+        self.assertEqual(INDEX.count('class="dock-button'), 3)
+
+    def test_featured_section_is_recommended_songs(self) -> None:
+        self.assertIn("Recommended Songs", INDEX)
+        self.assertNotIn(">Featured<", INDEX)
+
+    def test_play_pause_button_updates_label(self) -> None:
+        self.assertIn("updatePlayPauseButton", APP_JS)
+        self.assertIn('els.playPause.textContent = els.audio.paused ? "Play" : "Pause"', APP_JS)
 
     def test_one_playback_start_per_attempt_guard_exists(self) -> None:
         self.assertIn("emittedPlaybackStarts", APP_JS)
