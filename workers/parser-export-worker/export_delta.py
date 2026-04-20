@@ -1,12 +1,45 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from packages.config import load_config
 from packages.db_access.postgres import PostgresRepository
+
+logger = logging.getLogger(__name__)
+
+BUCKET = os.environ.get("ARTIFACT_BUCKET", "proj23-mlflow-artifacts")
+ENDPOINT = os.environ.get("AWS_ENDPOINT_URL") or os.environ.get("S3_ENDPOINT")
+
+
+def _s3_client():
+    import boto3
+    from botocore.config import Config
+
+    verify = os.environ.get("S3_NO_VERIFY_SSL", "true").lower() not in {"1", "true", "yes"}
+    return boto3.client(
+        "s3",
+        endpoint_url=ENDPOINT,
+        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY"),
+        verify=verify,
+        config=Config(signature_version="s3v4", retries={"max_attempts": 5, "mode": "standard"}),
+    )
+
+
+def _upload_delta_to_s3(local_dir: Path, stamp: str) -> None:
+    client = _s3_client()
+    prefix = f"session_event/delta/{stamp}/"
+    for file in local_dir.iterdir():
+        if file.is_file():
+            key = prefix + file.name
+            logger.info(f"Uploading {file.name} → s3://{BUCKET}/{key}")
+            client.upload_file(str(file), BUCKET, key)
+    logger.info(f"S3 upload complete: s3://{BUCKET}/{prefix}")
 
 
 def export_delta(version: str | None = None) -> Path:
@@ -81,6 +114,9 @@ def export_delta(version: str | None = None) -> Path:
         )
 
         repo.record_delta_export_success(stamp, last_int_id, row_counts)
+
+        _upload_delta_to_s3(output, stamp)
+
         return output
 
     except Exception as exc:
