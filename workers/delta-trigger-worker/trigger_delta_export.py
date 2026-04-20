@@ -4,6 +4,7 @@ import logging
 import sys
 from typing import Optional
 
+from packages.airflow_trigger import trigger_airflow_retrain
 from packages.config import load_config
 from packages.db_access.postgres import PostgresRepository
 
@@ -52,6 +53,13 @@ def check_and_trigger_delta_export(threshold: int = 1000) -> Optional[str]:
 
         result = export_delta()
         logger.info(f"Delta export completed: {result}")
+
+        try:
+            dag_run = trigger_airflow_retrain()
+            logger.info(f"Retraining triggered: dag_run_id={dag_run.get('dag_run_id')}")
+        except Exception as airflow_exc:
+            logger.warning(f"Delta export succeeded but Airflow trigger failed: {airflow_exc}")
+
         return str(result)
 
     except Exception as exc:
@@ -60,19 +68,21 @@ def check_and_trigger_delta_export(threshold: int = 1000) -> Optional[str]:
 
 
 if __name__ == "__main__":
+    import time
+
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     )
 
-    try:
-        result = check_and_trigger_delta_export()
-        if result:
-            print(f"Export completed: {result}")
-            sys.exit(0)
-        else:
-            print("Threshold not reached, no export performed")
-            sys.exit(0)
-    except Exception as exc:
-        logger.error(f"Fatal error: {exc}", exc_info=True)
-        sys.exit(1)
+    logger.info("Delta trigger worker started (hourly loop)")
+    while True:
+        try:
+            result = check_and_trigger_delta_export()
+            if result:
+                logger.info(f"Export + retrain triggered: {result}")
+            else:
+                logger.info("Threshold not reached, sleeping 1h")
+        except Exception as exc:
+            logger.error(f"Error in delta trigger cycle: {exc}", exc_info=True)
+        time.sleep(3600)

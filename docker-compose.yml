@@ -63,6 +63,9 @@ services:
       NAVIDROME_BASE_URL: http://navidrome:4533
       NAVIDROME_USERNAME: spotiboys
       NAVIDROME_PASSWORD: spotiboys
+      AIRFLOW_BASE_URL: ${AIRFLOW_BASE_URL:-http://localhost:8080}
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
     volumes:
       - /mnt/mlflow_persist_large/music:/music:ro
       - /mnt/mlflow_persist/spotiboys/serving-bundle:/serving-bundle:ro
@@ -181,11 +184,13 @@ services:
       context: .
       dockerfile: apps/recommendation-api/Dockerfile
     command: ["python", "workers/delta-trigger-worker/trigger_delta_export.py"]
-    profiles: ["jobs"]
     environment:
       SPOTIBOYS_RUNTIME_MODE: postgres
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
       SPOTIBOYS_OBJECT_STORAGE_ROOT: /object-storage
+      AIRFLOW_BASE_URL: ${AIRFLOW_BASE_URL:-http://localhost:8080}
+      AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
+      AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
     volumes:
       - /mnt/mlflow_persist/spotiboys/object-storage:/object-storage
     depends_on:

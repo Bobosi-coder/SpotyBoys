@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+from packages.airflow_trigger import trigger_airflow_retrain
 from packages.artifact_runtime import ServingBundle
 from packages.auth import (
     clear_session_cookie,
@@ -216,6 +217,31 @@ def stream(track_id: str, request: Request) -> Response:
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     return Response(content=payload, media_type=media_type)
+
+
+@app.post("/admin/trigger-retrain")
+def admin_trigger_retrain() -> dict:
+    """Force delta export + Airflow retraining DAG trigger (demo/manual use)."""
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "export_delta",
+        Path(__file__).parent.parent.parent.parent
+        / "workers" / "parser-export-worker" / "export_delta.py",
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    export_path = str(mod.export_delta())
+
+    dag_run = trigger_airflow_retrain()
+    return {
+        "status": "triggered",
+        "export_path": export_path,
+        "dag_run_id": dag_run.get("dag_run_id"),
+        "dag_state": dag_run.get("state"),
+    }
 
 
 @app.get("/covers/{track_id}")
