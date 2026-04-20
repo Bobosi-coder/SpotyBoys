@@ -14,6 +14,7 @@ from packages.shared_contracts.schemas import (
     ImpressionEventRequest,
     PlaybackEventRequest,
 )
+from packages.shared_contracts.enums import PlaybackEventType
 
 config = load_config()
 repository, runtime_state = build_repository_and_runtime(config)
@@ -58,6 +59,8 @@ def playback_event(payload: PlaybackEventRequest, request: Request) -> EventAck:
     accepted = runtime_state.remember_once("idem:playback", authenticated_payload.event_id)
     if accepted:
         repository.persist_playback_event(authenticated_payload.event_id, authenticated_payload.dict())
+        if authenticated_payload.event_type in {PlaybackEventType.PLAYBACK_START, PlaybackEventType.COMPLETE}:
+            runtime_state.append_recent_track(authenticated_payload.session_id, authenticated_payload.track_id)
     return EventAck(status="ok", duplicate=not accepted, event_id=authenticated_payload.event_id)
 
 

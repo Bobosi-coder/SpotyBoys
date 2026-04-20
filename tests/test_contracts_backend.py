@@ -215,11 +215,17 @@ class BackendContractTests(unittest.TestCase):
 
     def test_policy_reranking_removes_recent_tracks(self) -> None:
         first = self.recommender.recommend_next(RecommendationRequest(session_id="sess_recent", user_id="user_demo"))
-        self.runtime.set_queue("sess_recent", first.queue.items[:2])
+        self.runtime.append_recent_track("sess_recent", first.queue.items[0].track_id)
         second = self.recommender.recommend_next(RecommendationRequest(session_id="sess_recent", user_id="user_demo"))
         removed = self.recommender.last_pipeline_trace.c4_removed_track_ids  # type: ignore[union-attr]
         self.assertIn(first.queue.items[0].track_id, removed)
         self.assertNotIn(first.queue.items[0].track_id, [item.track_id for item in second.queue.items])
+
+    def test_queue_contents_are_not_recent_history_until_playback_event(self) -> None:
+        first = self.recommender.recommend_next(RecommendationRequest(session_id="sess_queue_not_recent", user_id="user_demo"))
+        self.assertEqual(self.runtime.recent_track_ids("sess_queue_not_recent"), [])
+        self.runtime.append_recent_track("sess_queue_not_recent", first.queue.items[0].track_id)
+        self.assertEqual(self.runtime.recent_track_ids("sess_queue_not_recent"), [first.queue.items[0].track_id])
 
     def test_dislike_feedback_changes_future_policy_filtering(self) -> None:
         first = self.recommender.recommend_next(RecommendationRequest(session_id="sess_dislike", user_id="user_demo"))

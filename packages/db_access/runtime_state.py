@@ -11,6 +11,7 @@ class InMemoryRuntimeState:
     def __init__(self) -> None:
         self._queues: Dict[str, QueueState] = {}
         self._dedupe: Set[str] = set()
+        self._recent_tracks: Dict[str, List[str]] = {}
 
     def get_queue(self, session_id: str) -> QueueState:
         return self._queues.get(
@@ -38,7 +39,11 @@ class InMemoryRuntimeState:
         return True
 
     def recent_track_ids(self, session_id: str) -> List[str]:
-        return [item.track_id for item in self.get_queue(session_id).items]
+        return list(self._recent_tracks.get(session_id, []))
+
+    def append_recent_track(self, session_id: str, track_id: str, limit: int = 50) -> None:
+        recent = [track_id, *[item for item in self._recent_tracks.get(session_id, []) if item != track_id]]
+        self._recent_tracks[session_id] = recent[:limit]
 
 
 class RedisRuntimeState:
@@ -66,9 +71,6 @@ class RedisRuntimeState:
         )
         pipe = self.client.pipeline()
         pipe.set(self._queue_key(session_id), state.json())
-        track_ids = [item.track_id for item in state.items]
-        if track_ids:
-            pipe.sadd(f"sess:{session_id}:recent_tracks", *track_ids)
         pipe.execute()
         return state
 
@@ -76,7 +78,15 @@ class RedisRuntimeState:
         return bool(self.client.set(f"{namespace}:{identifier}", "1", nx=True, ex=60 * 60 * 24))
 
     def recent_track_ids(self, session_id: str) -> List[str]:
-        return [str(item) for item in self.client.smembers(f"sess:{session_id}:recent_tracks")]
+        return [str(item) for item in self.client.lrange(f"sess:{session_id}:recent_tracks", 0, 49)]
+
+    def append_recent_track(self, session_id: str, track_id: str, limit: int = 50) -> None:
+        key = f"sess:{session_id}:recent_tracks"
+        pipe = self.client.pipeline()
+        pipe.lrem(key, 0, track_id)
+        pipe.lpush(key, track_id)
+        pipe.ltrim(key, 0, limit - 1)
+        pipe.execute()
 
     @staticmethod
     def _queue_key(session_id: str) -> str:

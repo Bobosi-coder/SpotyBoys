@@ -43,6 +43,9 @@
 - Iteration 4 hardening: reduced C2/C3 memory pressure by memory-mapping Item2Vec embeddings and sharing C2 retriever embeddings, track maps, and user centroids with the C3 GRU ranker.
 - Iteration 4 hardening: VM catalog sync now builds canonical playable tracks from `/music/manifest.csv` when available, otherwise from audio filenames under `/music`.
 - Iteration 4 hardening: demo healthcheck now validates streaming through the first live backend-owned playable queue item rather than hardcoding fixture track `trk_001`.
+- Demo hardening: playback interactions now refresh recommendations after actual playback starts, and reaching the end of the queue fetches the next recommendation set instead of wrapping to item 1.
+- Demo hardening: runtime recent-track state now records actual playback events rather than treating the entire backend queue as listened history.
+- Demo hardening: catalog sync now prints progress percent, rate, elapsed time, and ETA every `SPOTIBOYS_CATALOG_PROGRESS_EVERY` rows and can run detached in the background.
 - Iteration 4: event ingestion now binds persisted user/session IDs to the authenticated cookie.
 - Iteration 4: playable-track, stream, and cover routes now require authenticated session cookies.
 - Iteration 4: added durable auth-session schema and in-memory test implementation.

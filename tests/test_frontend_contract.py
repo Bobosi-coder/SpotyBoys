@@ -43,6 +43,16 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("emitPlaybackStartOnce", APP_JS)
         self.assertIn("state.emittedPlaybackStarts.has(state.playbackAttemptId)", APP_JS)
 
+    def test_queue_does_not_wrap_after_last_track(self) -> None:
+        self.assertIn("playNextFromQueue", APP_JS)
+        self.assertIn("refreshRecommendations({ autoplayFirst: true })", APP_JS)
+        self.assertNotIn("state.queue.items[currentIndex + 1] || state.queue.items[0]", APP_JS)
+
+    def test_playback_interaction_refreshes_recommendations(self) -> None:
+        self.assertIn('event_type: "playback_start"', APP_JS)
+        self.assertIn("await refreshRecommendations({ preserveCurrent: true })", APP_JS)
+        self.assertIn('emitPlaybackLifecycle("complete")', APP_JS)
+
 
 if __name__ == "__main__":
     unittest.main()

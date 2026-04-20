@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import csv
 import json
+import os
+import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
@@ -18,8 +20,15 @@ def sync_catalog() -> int:
     config = load_config()
     repository, _runtime = build_repository_and_runtime(config)
     rows = _catalog_rows(config)
+    limit = int(os.environ.get("SPOTIBOYS_CATALOG_SYNC_LIMIT", "0") or "0")
+    if limit > 0:
+        rows = rows[:limit]
+    total = len(rows)
+    progress_every = max(1, int(os.environ.get("SPOTIBOYS_CATALOG_PROGRESS_EVERY", "500") or "500"))
+    started_at = time.monotonic()
     synced = 0
-    for row in rows:
+    print(f"catalog sync starting: total={total} limit={limit or 'none'}", flush=True)
+    for index, row in enumerate(rows, start=1):
         if hasattr(repository, "upsert_playable_track"):
             repository.upsert_playable_track(
                 PlayableTrackRecord(
@@ -47,7 +56,33 @@ def sync_catalog() -> int:
             quarantine_reason=row.get("quarantine_reason"),
         )
         synced += 1
+        if index == 1 or index % progress_every == 0 or index == total:
+            _print_progress(index, total, synced, started_at)
     return synced
+
+
+def _print_progress(processed: int, total: int, synced: int, started_at: float) -> None:
+    elapsed = max(0.001, time.monotonic() - started_at)
+    rate = processed / elapsed
+    remaining = max(0, total - processed)
+    eta_seconds = int(remaining / rate) if rate > 0 else 0
+    percent = (processed * 100.0 / total) if total else 100.0
+    print(
+        "catalog sync progress: "
+        f"processed={processed}/{total} "
+        f"percent={percent:.2f}% "
+        f"synced={synced} "
+        f"rate={rate:.1f}/s "
+        f"elapsed={_format_seconds(int(elapsed))} "
+        f"eta={_format_seconds(eta_seconds)}",
+        flush=True,
+    )
+
+
+def _format_seconds(seconds: int) -> str:
+    minutes, sec = divmod(max(0, seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02d}:{minutes:02d}:{sec:02d}"
 
 
 def _catalog_rows(config) -> list[dict]:

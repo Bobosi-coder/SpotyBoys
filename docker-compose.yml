@@ -115,6 +115,8 @@ services:
       REDIS_URL: redis://redis:6379/0
       SPOTIBOYS_FIXTURE_PATH: /app/fixtures/demo_catalog.json
       SPOTIBOYS_MEDIA_MODE: navidrome_fixture
+      SPOTIBOYS_CATALOG_PROGRESS_EVERY: ${SPOTIBOYS_CATALOG_PROGRESS_EVERY:-500}
+      SPOTIBOYS_CATALOG_SYNC_LIMIT: ${SPOTIBOYS_CATALOG_SYNC_LIMIT:-0}
       NAVIDROME_BASE_URL: http://navidrome:4533
       NAVIDROME_USERNAME: spotiboys
       NAVIDROME_PASSWORD: spotiboys

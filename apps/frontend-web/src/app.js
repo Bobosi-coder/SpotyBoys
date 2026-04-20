@@ -7,6 +7,8 @@ const state = {
   queue: { items: [], revision: 1, drawer_default_open: false },
   drawerOpen: false,
   currentTrack: null,
+  currentLink: null,
+  refreshInFlight: null,
   playbackAttemptId: null,
   emittedPlaybackStarts: new Set(),
   authMode: "login"
@@ -201,6 +203,7 @@ function toggleDrawer(open) {
 
 async function startTrack(item) {
   state.currentTrack = item;
+  state.currentLink = queueLinkForTrack(item.track_id);
   state.playbackAttemptId = `${item.track_id}:${Date.now()}`;
   els.nowTitle.textContent = item.title;
   els.nowArtist.textContent = item.artist;
@@ -213,12 +216,12 @@ async function startTrack(item) {
   }
 }
 
-function emitPlaybackStartOnce() {
+async function emitPlaybackStartOnce() {
   if (!state.currentTrack || !state.playbackAttemptId || state.emittedPlaybackStarts.has(state.playbackAttemptId)) {
     return;
   }
   state.emittedPlaybackStarts.add(state.playbackAttemptId);
-  const linked = queueLinkForTrack(state.currentTrack.track_id);
+  const linked = state.currentLink || queueLinkForTrack(state.currentTrack.track_id);
   const payload = {
     event_id: `evt_${state.playbackAttemptId}`,
     event_type: "playback_start",
@@ -232,9 +235,12 @@ function emitPlaybackStartOnce() {
     occurred_at: new Date().toISOString(),
     client_event_seq: state.emittedPlaybackStarts.size
   };
-  fetchJson(apiUrl(eventBase, "/events/playback"), { method: "POST", body: JSON.stringify(payload) }).catch(() => {
+  try {
+    await fetchJson(apiUrl(eventBase, "/events/playback"), { method: "POST", body: JSON.stringify(payload) });
+    await refreshRecommendations({ preserveCurrent: true });
+  } catch (_error) {
     showStatus("Playback continues while event logging is degraded.");
-  });
+  }
 }
 
 function queueLinkForTrack(trackId) {
@@ -263,7 +269,17 @@ function emitImpression(impressionId, requestId, fallbackImpressionId) {
   }).catch(() => showStatus("Playback works, but event logging is degraded."));
 }
 
-async function refreshRecommendations() {
+async function refreshRecommendations(options = {}) {
+  if (state.refreshInFlight) {
+    return state.refreshInFlight;
+  }
+  state.refreshInFlight = doRefreshRecommendations(options).finally(() => {
+    state.refreshInFlight = null;
+  });
+  return state.refreshInFlight;
+}
+
+async function doRefreshRecommendations(options = {}) {
   const payload = await fetchJson(apiUrl(recommendationBase, "/recommendations/next"), {
     method: "POST",
     body: JSON.stringify({
@@ -277,6 +293,45 @@ async function refreshRecommendations() {
   els.modelVersion.textContent = payload.model_version;
   renderAll();
   emitImpression(payload.impression_id, payload.request_id, payload.impression_id);
+  if (options.autoplayFirst && state.queue.items[0]) {
+    await startTrack(state.queue.items[0]);
+  }
+}
+
+async function emitPlaybackLifecycle(eventType, track = state.currentTrack) {
+  if (!track || !state.session) return;
+  const linked = state.currentLink || queueLinkForTrack(track.track_id);
+  const eventId = `evt_${eventType}_${track.track_id}_${Date.now()}`;
+  await fetchJson(apiUrl(eventBase, "/events/playback"), {
+    method: "POST",
+    body: JSON.stringify({
+      event_id: eventId,
+      event_type: eventType,
+      session_id: state.session.session_id,
+      user_id: state.session.user_id,
+      track_id: track.track_id,
+      request_id: linked.request_id,
+      impression_id: linked.impression_id,
+      position_ms: Math.max(0, Math.floor((els.audio.currentTime || 0) * 1000)),
+      playback_ms: Math.max(0, Math.floor((els.audio.currentTime || 0) * 1000)),
+      occurred_at: new Date().toISOString(),
+      client_event_seq: state.emittedPlaybackStarts.size + 1
+    })
+  });
+}
+
+async function playNextFromQueue() {
+  if (!state.queue.items.length) {
+    await refreshRecommendations({ autoplayFirst: true });
+    return;
+  }
+  const currentIndex = state.queue.items.findIndex((item) => state.currentTrack && item.track_id === state.currentTrack.track_id);
+  const next = state.queue.items[currentIndex + 1];
+  if (next) {
+    await startTrack(next);
+    return;
+  }
+  await refreshRecommendations({ autoplayFirst: true });
 }
 
 function showStatus(message) {
@@ -305,10 +360,9 @@ els.playPause.addEventListener("click", () => {
     els.audio.pause();
   }
 });
-els.skipNext.addEventListener("click", () => {
-  const currentIndex = state.queue.items.findIndex((item) => state.currentTrack && item.track_id === state.currentTrack.track_id);
-  const next = state.queue.items[currentIndex + 1] || state.queue.items[0];
-  if (next) startTrack(next);
+els.skipNext.addEventListener("click", async () => {
+  await emitPlaybackLifecycle("skip").catch(() => showStatus("Skip logged locally while event service recovers."));
+  await playNextFromQueue();
 });
 els.skipBack.addEventListener("click", () => {
   if (els.audio.currentTime > 3) {
@@ -335,6 +389,9 @@ els.logout.addEventListener("click", async () => {
   showAuth(true);
 });
 els.audio.addEventListener("playing", emitPlaybackStartOnce);
-els.audio.addEventListener("ended", refreshRecommendations);
+els.audio.addEventListener("ended", async () => {
+  await emitPlaybackLifecycle("complete").catch(() => showStatus("Completion logging is degraded."));
+  await playNextFromQueue();
+});
 
 bootstrap();

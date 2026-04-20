@@ -49,7 +49,7 @@ class RecommendationService:
     def build_bootstrap_surfaces(self, session_id: str, user_id: str) -> Tuple[BrowseSurface, List[QueueItem]]:
         request_id = f"req_bootstrap_{session_id}"
         impression_id = f"imp_bootstrap_{session_id}"
-        return self._compose_surfaces(request_id, impression_id)
+        return self._compose_surfaces(request_id, impression_id, session_id, user_id)
 
     def recommend_next(self, request: RecommendationRequest) -> RecommendationResponse:
         request_id = request.request_id or f"req_{uuid.uuid4().hex}"
