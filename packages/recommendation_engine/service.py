@@ -25,11 +25,16 @@ class RecommendationService:
         repository: DemoRepository,
         runtime_state: InMemoryRuntimeState,
         serving_bundle: Optional[ServingBundle] = None,
+        require_full_ml_pipeline: bool = False,
     ) -> None:
         self.repository = repository
         self.runtime_state = runtime_state
         self.serving_bundle = serving_bundle
-        self.pipeline = ServingRecommendationPipeline(serving_bundle) if serving_bundle else None
+        self.pipeline = (
+            ServingRecommendationPipeline(serving_bundle, require_full_runtime=require_full_ml_pipeline)
+            if serving_bundle
+            else None
+        )
 
     @property
     def model_version(self) -> str:

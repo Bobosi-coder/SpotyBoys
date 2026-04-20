@@ -38,6 +38,11 @@
 - Iteration 3: C2 retrieval, C3 ranker scoring, and C4 policy reranking now execute in the recommendation path.
 - Iteration 4: added first-party email/password signup, login, logout, and HttpOnly session-cookie auth.
 - Iteration 4: recommendation bootstrap/next now use backend-authenticated user/session identity instead of config globals or client identity.
+- Iteration 4 hardening: Docker serving now requires the full C1-C4 ML pipeline by default with `SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE=true`.
+- Iteration 4 hardening: removed the VM-library default low-memory model-stack bypass; production serving now fails fast if real C2/C3 cannot load or returns no playable overlap.
+- Iteration 4 hardening: reduced C2/C3 memory pressure by memory-mapping Item2Vec embeddings and sharing C2 retriever embeddings, track maps, and user centroids with the C3 GRU ranker.
+- Iteration 4 hardening: VM catalog sync now builds canonical playable tracks from `/music/manifest.csv` when available, otherwise from audio filenames under `/music`.
+- Iteration 4 hardening: demo healthcheck now validates streaming through the first live backend-owned playable queue item rather than hardcoding fixture track `trk_001`.
 - Iteration 4: event ingestion now binds persisted user/session IDs to the authenticated cookie.
 - Iteration 4: playable-track, stream, and cover routes now require authenticated session cookies.
 - Iteration 4: added durable auth-session schema and in-memory test implementation.

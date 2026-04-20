@@ -228,6 +228,36 @@ class PostgresRepository:
                     ),
                 )
 
+    def upsert_playable_track(self, track: PlayableTrackRecord) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.playable_tracks
+                        (track_id, title, artist, album, duration_sec, cover_art_url, is_playable, availability_status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (track_id) DO UPDATE SET
+                        title = EXCLUDED.title,
+                        artist = EXCLUDED.artist,
+                        album = EXCLUDED.album,
+                        duration_sec = EXCLUDED.duration_sec,
+                        cover_art_url = EXCLUDED.cover_art_url,
+                        is_playable = EXCLUDED.is_playable,
+                        availability_status = EXCLUDED.availability_status,
+                        updated_at = NOW()
+                    """,
+                    (
+                        track.track_id,
+                        track.title,
+                        track.artist,
+                        track.album,
+                        track.duration_sec,
+                        track.cover_art_url,
+                        track.is_playable,
+                        track.availability_status,
+                    ),
+                )
+
     def persist_recommendation_impression(self, impression_id: str, payload: Dict[str, Any]) -> bool:
         data = to_jsonable(payload)
         with self._connect() as conn:

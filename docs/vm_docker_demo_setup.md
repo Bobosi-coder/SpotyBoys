@@ -151,7 +151,7 @@ Use the project name and VM frontend port:
 export COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
 export SPOTIBOYS_FRONTEND_PORT=8089
 export SPOTIBOYS_VM_MUSIC_ROOT=/mnt/mlflow_persist_large/music
-export SPOTIBOYS_ENABLE_REAL_RUNTIME=false
+export SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE=true
 
 docker compose \
   -f docker-compose.yml \
@@ -394,7 +394,8 @@ It does three important things:
 - skips fixture music generation
 - mounts `${SPOTIBOYS_VM_MUSIC_ROOT}` read-only into Navidrome at `/music`
 - sets `SPOTIBOYS_MEDIA_MODE=navidrome_vm_library`
-- defaults `SPOTIBOYS_ENABLE_REAL_RUNTIME=false` so the shared VM does not OOM while loading the full in-process Item2vec/co-occurrence/centroid runtime
+- requires the full C1-C4 serving path with `SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE=true`
+- builds the playable canonical catalog from `/music/manifest.csv` when present, otherwise from audio filenames
 
 For the real mounted VM music library:
 
@@ -402,6 +403,7 @@ For the real mounted VM music library:
 - mount the VM music root into the Navidrome `/music` path
 - ensure catalog reconciliation maps canonical playable track IDs to Navidrome media IDs
 - ensure canonical track IDs match the trained artifact track ID namespace for direct C2/C3 output surfacing
+- if `recommendation-api` exits with `oom=true`, increase VM/container memory or stop unrelated workloads; do not disable the model stack for the graded demo
 
 Do not expose Navidrome directly to the browser. Keep nginx as the only public ingress and keep playback going through:
 
@@ -426,7 +428,7 @@ sudo lsof -iTCP:8089 -sTCP:LISTEN
 export COMPOSE_PROJECT_NAME=spotiboys_vm1_demo
 export SPOTIBOYS_FRONTEND_PORT=8089
 export SPOTIBOYS_VM_MUSIC_ROOT=/mnt/mlflow_persist_large/music
-export SPOTIBOYS_ENABLE_REAL_RUNTIME=false
+export SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE=true
 docker compose -f docker-compose.yml -f docker-compose.vm-library.yml up --build -d
 
 BASE_URL=http://127.0.0.1:8089 bash infra/scripts/healthcheck_demo.sh

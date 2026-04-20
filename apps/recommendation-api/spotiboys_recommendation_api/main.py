@@ -43,7 +43,12 @@ repository.register_active_model_version(
     serving_bundle.version,
     str(config.serving_bundle_path / "manifest.json"),
 )
-recommendation_service = RecommendationService(repository, runtime_state, serving_bundle)
+recommendation_service = RecommendationService(
+    repository,
+    runtime_state,
+    serving_bundle,
+    require_full_ml_pipeline=config.require_full_ml_pipeline,
+)
 media_service = MediaAccessService(repository, config=config)
 
 app = FastAPI(title="SpotiBoys Recommendation API", version="0.1.0")
@@ -69,6 +74,12 @@ def ready() -> dict:
         "model_version": serving_bundle.model_version,
         "serving_bundle_version": serving_bundle.version,
         "media_mode": config.media_mode,
+        "full_ml_pipeline_required": config.require_full_ml_pipeline,
+        "pipeline_trace": recommendation_service.last_pipeline_trace.dict()
+        if hasattr(recommendation_service.last_pipeline_trace, "dict")
+        else recommendation_service.last_pipeline_trace.__dict__
+        if recommendation_service.last_pipeline_trace
+        else None,
     }
 
 

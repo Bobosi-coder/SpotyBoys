@@ -67,6 +67,7 @@ services:
       SPOTIBOYS_MEDIA_MODE: navidrome_fixture
       SPOTIBOYS_MUSIC_ROOT: /music
       SPOTIBOYS_SERVING_BUNDLE_PATH: /serving-bundle/Real_service/active
+      SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE: ${SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE:-true}
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
       REDIS_URL: redis://redis:6379/0
       SPOTIBOYS_FIXTURE_PATH: /app/fixtures/demo_catalog.json

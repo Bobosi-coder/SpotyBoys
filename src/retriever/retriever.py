@@ -68,7 +68,8 @@ class MultiRecallRetriever:
         # Item2Vec embeddings
         emb_path = os.path.join(processed_dir, "item2vec_128d.npy")
         t2r_path = os.path.join(processed_dir, "item2vec_track_to_row.json")
-        self.emb = np.load(emb_path).astype("float32")   # (N, 128)
+        emb = np.load(emb_path, mmap_mode="r")
+        self.emb = emb if emb.dtype == np.float32 else emb.astype("float32")   # (N, 128)
         with open(t2r_path) as f:
             t2r_raw = json.load(f)
         # t2r_raw keys are str; we keep int keys for fast int lookup

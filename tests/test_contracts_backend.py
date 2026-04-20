@@ -153,6 +153,7 @@ class BackendContractTests(unittest.TestCase):
                 object_storage_root=PROJECT_ROOT / ".local" / "object_storage",
                 object_storage_endpoint="file://.local/object_storage",
                 mlflow_tracking_uri="http://mlflow:5000",
+                require_full_ml_pipeline=False,
             ),
         )
         payload, media_type = media.stream_bytes("trk_001")
@@ -180,6 +181,7 @@ class BackendContractTests(unittest.TestCase):
                 object_storage_root=PROJECT_ROOT / ".local" / "object_storage",
                 object_storage_endpoint="file://.local/object_storage",
                 mlflow_tracking_uri="http://mlflow:5000",
+                require_full_ml_pipeline=False,
             ),
         )
         with self.assertRaises(LookupError):
@@ -200,6 +202,16 @@ class BackendContractTests(unittest.TestCase):
         self.assertNotEqual([item.track_id for item in response.queue.items][:4], ["trk_004", "trk_001", "trk_007", "trk_002"])
         for item in response.queue.items:
             self.assertIsNotNone(self.repository.get_playable_track(item.track_id))
+
+    def test_full_ml_pipeline_requirement_fails_without_real_runtime(self) -> None:
+        with self.assertRaises(RuntimeError) as raised:
+            RecommendationService(
+                self.repository,
+                self.runtime,
+                self.bundle,
+                require_full_ml_pipeline=True,
+            )
+        self.assertIn("Full C1-C4 ML pipeline is required", str(raised.exception))
 
     def test_policy_reranking_removes_recent_tracks(self) -> None:
         first = self.recommender.recommend_next(RecommendationRequest(session_id="sess_recent", user_id="user_demo"))

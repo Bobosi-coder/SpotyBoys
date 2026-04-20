@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import json
-import os
 import pickle
 from dataclasses import dataclass
 from pathlib import Path
@@ -36,17 +35,23 @@ class PipelineTrace:
 class ServingRecommendationPipeline:
     """VM1 serving pipeline: C2 retrieval, C3 ranker, C4 policy over offline C1 artifacts."""
 
-    def __init__(self, bundle: ServingBundle) -> None:
+    def __init__(self, bundle: ServingBundle, *, require_full_runtime: bool = False) -> None:
         self.bundle = bundle
+        self.require_full_runtime = require_full_runtime
         root = bundle.bundle_path
         self.real_retriever = None
         self.real_ranker = None
+        self.real_runtime_error: str | None = None
         self.cooc_session = _load_score_file(root / "cooc_session.npz")
         self.cooc_playlist = _load_score_file(root / "cooc_playlist.npz")
         self.centroids = _load_json_scores(root / "user_centroids.pkl")
         self.ranker_weights = _load_json(root / "gru_ranker.pt")
-        if os.environ.get("SPOTIBOYS_ENABLE_REAL_RUNTIME", "true").strip().lower() in {"1", "true", "yes"}:
-            self._try_load_real_runtime(root)
+        self._try_load_real_runtime(root)
+        if self.require_full_runtime and (not self.real_retriever or not self.real_ranker):
+            raise RuntimeError(
+                "Full C1-C4 ML pipeline is required, but the production C2/C3 runtime did not load: "
+                f"{self.real_runtime_error or 'unknown runtime load error'}"
+            )
         self.last_trace = PipelineTrace([], 0, [], False, False, [], [], [])
 
     def recommend(
@@ -63,8 +68,18 @@ class ServingRecommendationPipeline:
             recent_track_ids=list(recent_track_ids),
             disliked_track_ids=set(disliked_track_ids),
         )
-        if real_output:
+        if real_output is not None:
+            if self.require_full_runtime and not real_output:
+                raise RuntimeError(
+                    "Full C1-C4 ML pipeline returned zero playable recommendations. "
+                    "Check that catalog sync uses the same canonical track IDs as the trained artifacts."
+                )
             return real_output
+        if self.require_full_runtime:
+            raise RuntimeError(
+                "Full C1-C4 ML pipeline is required, but real C2/C3 produced no playable recommendations. "
+                "Check that playable canonical track IDs overlap the trained artifact track ID namespace."
+            )
         candidates = self.retrieve_candidates(playable_tracks, user_id=user_id)
         ranked = self.rank_candidates(candidates)
         disliked = set(disliked_track_ids)
@@ -106,10 +121,15 @@ class ServingRecommendationPipeline:
                 artifacts_dir=str(root),
                 i2v_dir=str(item2vec_dir),
                 retriever_dir=str(retriever_dir),
+                item_embeddings=self.real_retriever.emb,
+                track_to_row=self.real_retriever.t2r,
+                user_centroids=self.real_retriever.user_centroids,
             )
-        except Exception:
+            self.real_runtime_error = None
+        except Exception as exc:
             self.real_retriever = None
             self.real_ranker = None
+            self.real_runtime_error = f"{type(exc).__name__}: {exc}"
 
     def _recommend_with_real_runtime(
         self,
@@ -138,7 +158,9 @@ class ServingRecommendationPipeline:
                 ["neutral"] * len(recent_ints),
                 candidate_ids,
             )
-        except Exception:
+        except Exception as exc:
+            if self.require_full_runtime:
+                raise RuntimeError(f"Full C1-C4 ML pipeline recommendation failed: {type(exc).__name__}: {exc}") from exc
             return None
         output: List[PlayableTrackRecord] = []
         seen_artists: Dict[str, int] = {}
@@ -157,6 +179,8 @@ class ServingRecommendationPipeline:
             if len(output) >= 18:
                 break
         if not output:
+            if self.require_full_runtime:
+                return []
             return None
         self.last_trace = PipelineTrace(
             c1_artifacts_loaded=[

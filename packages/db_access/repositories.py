@@ -207,3 +207,6 @@ class DemoRepository:
             availability_status=availability_status,
             quarantine_reason=quarantine_reason,
         )
+
+    def upsert_playable_track(self, track: PlayableTrackRecord) -> None:
+        self._tracks[track.track_id] = track

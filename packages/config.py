@@ -27,6 +27,7 @@ class AppConfig:
     object_storage_root: Path
     object_storage_endpoint: str
     mlflow_tracking_uri: str
+    require_full_ml_pipeline: bool
 
 
 def load_config() -> AppConfig:
@@ -56,4 +57,9 @@ def load_config() -> AppConfig:
         object_storage_root=Path(os.environ.get("SPOTIBOYS_OBJECT_STORAGE_ROOT", str(PROJECT_ROOT / ".local" / "object_storage"))),
         object_storage_endpoint=os.environ.get("OBJECT_STORAGE_ENDPOINT", "file://.local/object_storage"),
         mlflow_tracking_uri=os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000"),
+        require_full_ml_pipeline=_truthy(os.environ.get("SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE", "true")),
     )
+
+
+def _truthy(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}

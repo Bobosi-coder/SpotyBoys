@@ -54,9 +54,18 @@ with opener.open(request, timeout=5) as response:
 assert auth["auth_state"] == "authenticated"
 print("OK auth signup/session cookie")
 
+with opener.open(f"{base}/session/bootstrap", timeout=15) as response:
+    payload = json.loads(response.read().decode("utf-8"))
+assert len(payload["browse_surface"]["featured_items"]) <= 4
+assert len(payload["browse_surface"]["random_carousel_items"]) <= 10
+assert payload["queue"]["drawer_default_open"] is False
+print("OK contract caps/defaults")
+
+mapped_track_id = payload["queue"]["items"][0]["track_id"]
+
 for label, url in [
-    ("playable track", f"{base}/playable-track/trk_001"),
-    ("stream mapped", f"{base}/stream/trk_001"),
+    ("playable track", f"{base}/playable-track/{mapped_track_id}"),
+    ("stream mapped", f"{base}/stream/{mapped_track_id}"),
 ]:
     with opener.open(url, timeout=5) as response:
         status = response.status
@@ -65,13 +74,13 @@ for label, url in [
         raise SystemExit(1)
     print(f"OK {label}: HTTP {status}")
 
-with opener.open(f"{base}/stream/trk_001", timeout=5) as response:
+with opener.open(f"{base}/stream/{mapped_track_id}", timeout=15) as response:
     content_type = response.headers.get("content-type", "")
     prefix = response.read(8)
-if "audio/mpeg" not in content_type and not prefix.startswith(b"ID3"):
-    print(f"FAIL stream mapped is not real MP3/Navidrome fixture audio: {content_type} {prefix!r}")
+if "audio/" not in content_type and not prefix.startswith((b"ID3", b"RIFF", b"fLaC", b"OggS")):
+    print(f"FAIL stream mapped is not real Navidrome audio: {content_type} {prefix!r}")
     raise SystemExit(1)
-print("OK stream mapped real fixture audio")
+print(f"OK stream mapped real Navidrome audio for {mapped_track_id}")
 
 try:
     opener.open(f"{base}/stream/trk_missing", timeout=5)
@@ -84,13 +93,6 @@ except urllib.error.HTTPError as exc:
 else:
     print("FAIL stream unmapped should fail closed")
     raise SystemExit(1)
-
-with opener.open(f"{base}/session/bootstrap", timeout=5) as response:
-    payload = json.loads(response.read().decode("utf-8"))
-assert len(payload["browse_surface"]["featured_items"]) <= 4
-assert len(payload["browse_surface"]["random_carousel_items"]) <= 10
-assert payload["queue"]["drawer_default_open"] is False
-print("OK contract caps/defaults")
 
 recommendation_request = {
     "session_id": payload["session_id"],

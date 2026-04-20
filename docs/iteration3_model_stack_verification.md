@@ -9,7 +9,7 @@
 
 ## C1 Fulfillment
 
-C1 is correctly offline-only. The online request path does not recompute track encoders or Item2Vec. Serving consumes offline-produced artifacts through the manifest-confirmed bundle under `fixtures/serving_bundle/Real_service/demo-fixture-v1`.
+C1 is correctly offline-only. The online request path does not recompute track encoders or Item2Vec. Serving consumes offline-produced artifacts through the manifest-confirmed bundle mounted at `SPOTIBOYS_SERVING_BUNDLE_PATH`.
 
 Relevant artifact/interface files:
 
@@ -19,11 +19,11 @@ Relevant artifact/interface files:
 - `cooc_session.npz`
 - `cooc_playlist.npz`
 
-The same interface is used locally and on VM1 through `SPOTIBOYS_SERVING_BUNDLE_PATH`.
+The same interface is used locally and on VM1 through `SPOTIBOYS_SERVING_BUNDLE_PATH`. The VM artifact fetch worker stages the latest object-storage `Real_service/<version>` bundle and Item2Vec artifacts into `/serving-bundle`.
 
 ## C2 Fulfillment
 
-C2 now executes online in `packages/recommendation_engine/pipeline.py::ServingRecommendationPipeline.retrieve_candidates`.
+C2 executes online through the production retriever when `SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE=true`. The exact path is `packages/recommendation_engine/pipeline.py::ServingRecommendationPipeline._recommend_with_real_runtime` -> `src/retriever/retriever.py::MultiRecallRetriever.retrieve`.
 
 Inputs:
 
@@ -33,31 +33,34 @@ Inputs:
 - `cooc_playlist.npz`,
 - `user_centroids.pkl`.
 
-Branches implemented now:
+Branches executed by the production retriever:
 
 - co-occurrence candidate scoring,
-- user-centroid candidate scoring,
+- user-centroid preference-nearest-neighbour candidate scoring,
 - popularity fallback candidate scoring.
 
-Nearest-neighbour retrieval is not implemented in the VM1 runtime and remains deferred because FAISS is explicitly out of current serving scope.
+FAISS is not used. The preference branch uses NumPy dot products over memory-mapped Item2Vec embeddings.
 
 ## C3 Fulfillment
 
-C3 now executes online in `packages/recommendation_engine/pipeline.py::ServingRecommendationPipeline.rank_candidates`.
+C3 executes online through the production GRU ranker when `SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE=true`. The exact path is `packages/recommendation_engine/pipeline.py::ServingRecommendationPipeline._recommend_with_real_runtime` -> `src/ranker/ranker.py::GRURankerInference.score`.
 
-The ranker loads `gru_ranker.pt` from the serving bundle. In the local fixture bundle this is a lightweight JSON checkpoint that changes ordering through ranker weights and track bias. This proves the serving path invokes the ranker artifact and that recommendation ordering is not static fixture order. Production tensor GRU inference remains iteration 4 work.
+The ranker loads `gru_ranker.pt` and `gru_ranker_config.json` from the serving bundle, consumes Item2Vec embeddings and user centroids, and performs a batched PyTorch forward pass through `src/ranker/model.py::GRURanker`.
+
+The lightweight fixture ranker remains usable only when `RecommendationService(..., require_full_ml_pipeline=False)` is selected by tests/debug tooling. Docker serving defaults to `SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE=true`; if the production C2/C3 runtime cannot load, `recommendation-api` fails instead of silently falling back.
 
 ## C4 Fulfillment
 
-C4 now executes online in `packages/recommendation_engine/pipeline.py::ServingRecommendationPipeline.apply_policy`.
+C4 executes online after C3 in `packages/recommendation_engine/pipeline.py::ServingRecommendationPipeline._recommend_with_real_runtime`.
 
 Implemented policy behavior:
 
 - removes recent tracks from the runtime queue context,
-- applies same-artist diversity penalty,
+- filters disliked tracks,
+- applies same-artist diversity limiting,
 - preserves playable-only filtering by operating only after repository playability filtering.
 
-Dislike filtering and exploration are not yet wired to durable feedback history and remain iteration 4 work.
+Exploration remains conservative; it must not override playability or dislike filtering.
 
 ## Runtime Truth
 
@@ -65,13 +68,13 @@ The final recommendation path is:
 
 1. Recommendation API loads a manifest-confirmed serving bundle at startup.
 2. Repository returns currently playable tracks only.
-3. C2 generates candidates from serving artifacts.
-4. C3 ranks candidates through the ranker artifact.
-5. C4 applies runtime policy.
+3. C2 generates candidates from production retriever artifacts.
+4. C3 ranks candidates through production GRU inference.
+5. C4 applies runtime policy and playable/dislike/recent filters.
 6. The API persists impression context before returning.
 7. Queue metadata retains request and impression linkage.
 
-The returned queue is no longer a static fixture ordering shortcut.
+The returned queue must not be a static fixture ordering shortcut. With `SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE=true`, startup or recommendation fails if the real runtime cannot execute or if trained artifact track IDs do not overlap the playable Navidrome catalog.
 
 ## Tests
 

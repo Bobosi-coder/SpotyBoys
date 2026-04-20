@@ -45,14 +45,28 @@ class GRURankerInference:
         artifacts_dir: str = OUT_DIR,
         i2v_dir:       str = I2V_DIR,
         retriever_dir: str = RETRIEVER_DIR,
+        item_embeddings=None,
+        track_to_row=None,
+        user_centroids=None,
     ):
-        self._load_artifacts(artifacts_dir, i2v_dir, retriever_dir)
+        self._load_artifacts(
+            artifacts_dir,
+            i2v_dir,
+            retriever_dir,
+            item_embeddings=item_embeddings,
+            track_to_row=track_to_row,
+            user_centroids=user_centroids,
+        )
 
     def _load_artifacts(
         self,
         artifacts_dir: str,
         i2v_dir: str,
         retriever_dir: str,
+        *,
+        item_embeddings=None,
+        track_to_row=None,
+        user_centroids=None,
     ) -> None:
         log.info("Loading GRURankerInference artifacts...")
 
@@ -76,18 +90,28 @@ class GRURankerInference:
         self.device = torch.device("cpu")
 
         # Item2Vec embeddings
-        emb_path = os.path.join(i2v_dir, "item2vec_128d.npy")
-        t2r_path = os.path.join(i2v_dir, "item2vec_track_to_row.json")
-        self.emb = np.load(emb_path).astype("float32")   # (N, 128)
-        with open(t2r_path) as f:
-            t2r_raw = json.load(f)
-        self.t2r: dict[int, int] = {int(k): v for k, v in t2r_raw.items()}
+        if item_embeddings is None:
+            emb_path = os.path.join(i2v_dir, "item2vec_128d.npy")
+            emb = np.load(emb_path, mmap_mode="r")
+            self.emb = emb if emb.dtype == np.float32 else emb.astype("float32")   # (N, 128)
+        else:
+            self.emb = item_embeddings
+        if track_to_row is None:
+            t2r_path = os.path.join(i2v_dir, "item2vec_track_to_row.json")
+            with open(t2r_path) as f:
+                t2r_raw = json.load(f)
+            self.t2r: dict[int, int] = {int(k): v for k, v in t2r_raw.items()}
+        else:
+            self.t2r = track_to_row
         log.info(f"  Embeddings: {self.emb.shape}")
 
         # User centroids
-        centroids_path = os.path.join(retriever_dir, "pref_nn", "user_centroids.pkl")
-        with open(centroids_path, "rb") as f:
-            self.user_centroids: dict[int, list] = pickle.load(f)
+        if user_centroids is None:
+            centroids_path = os.path.join(retriever_dir, "pref_nn", "user_centroids.pkl")
+            with open(centroids_path, "rb") as f:
+                self.user_centroids: dict[int, list] = pickle.load(f)
+        else:
+            self.user_centroids = user_centroids
         log.info(f"  User centroids: {len(self.user_centroids):,} users")
 
         log.info("GRURankerInference ready.")

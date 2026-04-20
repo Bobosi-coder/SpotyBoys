@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import json
 import urllib.parse
 import urllib.request
@@ -7,14 +8,33 @@ from pathlib import Path
 
 from packages.config import load_config
 from packages.db_access.factory import build_repository_and_runtime
+from packages.db_access.repositories import PlayableTrackRecord
+
+
+AUDIO_SUFFIXES = {".mp3", ".flac", ".m4a", ".ogg", ".opus", ".wav", ".aac"}
 
 
 def sync_catalog() -> int:
     config = load_config()
     repository, _runtime = build_repository_and_runtime(config)
-    payload = json.loads(Path(config.fixture_path).read_text(encoding="utf-8"))
+    rows = _catalog_rows(config)
     synced = 0
-    for row in payload["tracks"]:
+    for row in rows:
+        if hasattr(repository, "upsert_playable_track"):
+            repository.upsert_playable_track(
+                PlayableTrackRecord(
+                    track_id=str(row["track_id"]),
+                    title=str(row["title"]),
+                    artist=str(row.get("artist") or "Unknown Artist"),
+                    album=str(row.get("album") or ""),
+                    duration_sec=int(float(row.get("duration_sec") or 0)),
+                    cover_art_url=str(row.get("cover_art_url") or f"/covers/{row['track_id']}"),
+                    is_playable=True,
+                    navidrome_track_id=row.get("navidrome_track_id"),
+                    availability_status=str(row.get("availability_status", "available")),
+                    quarantine_reason=row.get("quarantine_reason"),
+                )
+            )
         navidrome_track_id = _resolve_navidrome_id(config, row) or row.get("navidrome_track_id")
         if not navidrome_track_id:
             continue
@@ -30,12 +50,90 @@ def sync_catalog() -> int:
     return synced
 
 
+def _catalog_rows(config) -> list[dict]:
+    if config.media_mode == "navidrome_vm_library":
+        rows = _rows_from_music_manifest(config.music_root / "manifest.csv")
+        if rows:
+            return rows
+        return _rows_from_audio_files(config.music_root)
+    payload = json.loads(Path(config.fixture_path).read_text(encoding="utf-8"))
+    return list(payload["tracks"])
+
+
+def _rows_from_music_manifest(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        for raw in reader:
+            track_id = _first(raw, "track_id", "id", "song_id", "item_id", "track", "tid")
+            file_value = _first(raw, "path", "file", "filename", "filepath", "relative_path")
+            if not track_id and file_value:
+                track_id = Path(file_value).stem
+            if not track_id:
+                continue
+            title = _first(raw, "title", "track_title", "song", "name") or str(track_id)
+            artist = _first(raw, "artist", "artist_name", "creator") or "Unknown Artist"
+            album = _first(raw, "album", "album_name") or ""
+            duration = _first(raw, "duration_sec", "duration", "length_sec", "seconds") or 0
+            rows.append(
+                {
+                    "track_id": str(track_id),
+                    "title": str(title),
+                    "artist": str(artist),
+                    "album": str(album),
+                    "duration_sec": duration,
+                    "cover_art_url": f"/covers/{track_id}",
+                    "availability_status": "available",
+                    "search_terms": [str(track_id), str(title), str(file_value or "")],
+                }
+            )
+    return rows
+
+
+def _rows_from_audio_files(root: Path) -> list[dict]:
+    if not root.exists():
+        return []
+    rows: list[dict] = []
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in AUDIO_SUFFIXES:
+            continue
+        track_id = path.stem
+        rows.append(
+            {
+                "track_id": track_id,
+                "title": track_id,
+                "artist": "Unknown Artist",
+                "album": "",
+                "duration_sec": 0,
+                "cover_art_url": f"/covers/{track_id}",
+                "availability_status": "available",
+                "search_terms": [track_id, path.name],
+            }
+        )
+    return rows
+
+
+def _first(row: dict, *names: str) -> str | None:
+    lowered = {str(key).strip().lower(): value for key, value in row.items()}
+    for name in names:
+        value = lowered.get(name)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
 def _resolve_navidrome_id(config, row: dict) -> str | None:
     if config.media_mode not in {"navidrome_fixture", "navidrome_vm_library", "navidrome"}:
         return None
-    songs = _search_songs(config, str(row["track_id"]))
-    if not songs:
-        songs = _search_songs(config, str(row["title"]))
+    songs: list[dict] = []
+    for term in [str(row["track_id"]), str(row.get("title", "")), *list(row.get("search_terms", []))]:
+        if not term:
+            continue
+        songs = _search_songs(config, term)
+        if songs:
+            break
     marker = str(row["track_id"]).lower()
     for song in songs:
         haystack = " ".join(str(song.get(key, "")) for key in ["id", "title", "path", "album", "artist"]).lower()
