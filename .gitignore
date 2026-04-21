@@ -1,61 +1,84 @@
-*.tar.gz
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# ── Virtual environments ──────────────────────────────────────────────────────
 .venv/
+venv/
+env/
 .env
 songs embedding/.venv/
-artifacts/audio_cache/
-artifacts/**/*.csv
-artifacts/**/*.npy
-artifacts/**/*.pth
+
+# ── Lock files (generated, not cross-platform) ────────────────────────────────
+uv.lock
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Editor / IDE ──────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Training artifacts (stored in S3, not git) ────────────────────────────────
+# Model weights and embeddings
 artifacts/**/*.pt
-artifacts/**/*.mp3
+artifacts/**/*.pth
+artifacts/**/*.bin
+artifacts/**/*.bin.vectors.npy
+artifacts/**/*.npy
+artifacts/**/*.pkl
+artifacts/**/*.npz
+# Data files produced by training pipeline
+artifacts/**/*.csv
+artifacts/**/*.parquet
+artifacts/**/*.json
+artifacts/**/*.tar.gz
+artifacts/**/*.tar
+artifacts/audio_cache/
+# Keep directory structure markers
 !artifacts/.gitkeep
 !artifacts/**/.gitkeep
 !artifacts/README.md
-data/audio_samples/*
-!data/audio_samples/.gitkeep
-data/raw/30music/*
-!data/raw/30music/.gitkeep
 
-# Large files and directories
+# ── Top-level training output directories ────────────────────────────────────
+/item2vec/
+/ranker/
+/retriever/
+/real_service/
 /models/
-/data/
-/venv/
-.DS_Store
 /audio_cache/
+
+# ── Build logs and process files ─────────────────────────────────────────────
+logs/
+*.log
+*.pid
+.ranker_build.pid
 .demo_gateway.pid
 .demo_gateway.log
 .local/
-/docs/
-!docs/
-docs/*
-!docs/agent_kickoff_report.md
-!docs/contracts_summary.md
-!docs/implementation_progress.md
-!docs/demo_runbook.md
-!docs/iteration2_gap_analysis.md
-!docs/iteration2_execution_plan.md
-!docs/iteration2_validation_runbook.md
-!docs/iteration3_gap_analysis.md
-!docs/iteration3_execution_plan.md
-!docs/iteration3_validation_runbook.md
-!docs/iteration3_model_stack_verification.md
-!docs/vm_docker_demo_setup.md
-*.tar
-*.pth
-!fixtures/serving_bundle/**/*.pt
 
-# Ignore parquet files and markdown files except README.md
-*.parquet
-**/*.md
-!README.md
-!**/README.md
+# ── Raw / large data ─────────────────────────────────────────────────────────
+/data/
+data/raw/30music/*
+!data/raw/30music/.gitkeep
+data/audio_samples/*
+!data/audio_samples/.gitkeep
 
-# Training artifacts (use S3 instead)
-artifacts/**/*.bin
-artifacts/**/*.pkl
-artifacts/**/*.npz
-artifacts/**/*.json
-logs/
-.ranker_build.pid
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# ── Test / coverage output ────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
