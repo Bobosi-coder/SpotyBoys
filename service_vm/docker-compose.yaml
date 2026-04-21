@@ -1,0 +1,79 @@
+name: spotyboys
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.3
+  environment:
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://user:password@postgres/airflowdb
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
+    AIRFLOW__WEBSERVER__SECRET_KEY: 'spotyboys-secret-2026'
+  volumes:
+    - ./airflow/dags:/opt/airflow/dags
+    - ./airflow/logs:/opt/airflow/logs
+    - /home/cc/.ssh/airflow_gpu_key:/opt/airflow/ssh/airflow_gpu_key:ro
+  depends_on:
+    - postgres
+
+services:
+  postgres:
+    image: postgres:18
+    container_name: postgres
+    restart: always
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: mlflowdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - /mnt/mlflow_persist/postgres_data:/var/lib/postgresql
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v3.9.0
+    container_name: mlflow
+    restart: always
+    depends_on:
+      - postgres
+    env_file:
+      - .env
+    environment:
+      MLFLOW_TRACKING_URI: http://0.0.0.0:8000
+      MLFLOW_LOGGING_LEVEL: ERROR
+      MLFLOW_SERVER_ALLOWED_HOSTS: "*"
+      MLFLOW_S3_ENDPOINT_URL: https://chi.tacc.chameleoncloud.org:7480
+    ports:
+      - "8000:8000"
+    command: >
+      /bin/sh -c "pip install psycopg2-binary boto3 &&
+      mlflow server --backend-store-uri postgresql://user:password@postgres/mlflowdb
+      --artifacts-destination s3://${BUCKET_NAME}/mlflow/ --serve-artifacts --host 0.0.0.0 --port 8000"
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command: -c "pip install apache-airflow-providers-ssh && airflow db migrate && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true"
+    restart: on-failure
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    command: bash -c "pip install apache-airflow-providers-ssh && airflow webserver"
+    ports:
+      - "8080:8080"
+    restart: always
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: bash -c "pip install apache-airflow-providers-ssh && airflow scheduler"
+    restart: always
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully

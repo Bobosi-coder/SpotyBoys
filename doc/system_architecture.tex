@@ -1,0 +1,619 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{caption}
+\usepackage{titlesec}
+\usepackage{listings}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue
+}
+
+\titleformat{\section}{\large\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.6em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries}{\thesubsubsection}{0.6em}{}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  frame=single,
+  backgroundcolor=\color{gray!8},
+  commentstyle=\color{gray},
+  keywordstyle=\color{blue},
+}
+
+\definecolor{noteblue}{RGB}{220,235,252}
+\newcommand{\note}[1]{\colorbox{noteblue}{\parbox{\dimexpr\linewidth-2\fboxsep}{\small #1}}}
+
+\title{\textbf{End-to-End Music Recommendation System\\Architecture Specification}}
+\author{SpotyBoys MLOps}
+\date{2026}
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% =============================================================================
+\section{System Overview}
+% =============================================================================
+
+This document specifies the production architecture for a real-time personalised music
+recommendation system built on top of Navidrome, an open-source music streaming server.
+The system combines three ML components --- Item2Vec (C1), Multi-Recall Retriever (C2), and
+GRU Ranker (C3) --- with a curated music library to deliver next-track recommendations
+without requiring users to provide any explicit input beyond normal playback interactions.
+
+\subsection{Design Principles}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Closed catalog}: the music library is curator-controlled.  Every track served
+        to users has a pre-computed embedding in \texttt{item2vec\_128d.npy}, guaranteeing that
+        C2 and C3 can score any candidate.
+  \item \textbf{Zero user friction}: labels are derived automatically from playback behaviour
+        (play ratio), not from explicit ratings.
+  \item \textbf{Latency budget}: the full C2+C3 pipeline must return recommendations in
+        $\leq 200\,\text{ms}$ at serving time.  Navidrome audio delivery is decoupled from
+        recommendation latency.
+  \item \textbf{Separation of concerns}: Navidrome handles auth, streaming, and metadata
+        display; the Recommendation API handles all ML inference.
+\end{itemize}
+
+\subsection{High-Level Component Diagram}
+
+\begin{center}
+\begin{tabular}{|c|}
+\hline
+\\
+\textbf{User Browser / Mobile App} \\
+\quad(custom lightweight web player) \\
+\\
+\hline
+\end{tabular}
+\\[4pt]
+$\downarrow$ \textit{audio stream (Subsonic API)} \quad\quad
+$\downarrow$ \textit{play events + recommendation requests (REST)}
+\\[4pt]
+\begin{tabular}{|c|c|}
+\hline
+\quad\textbf{Navidrome}\quad & \quad\textbf{Recommendation API (FastAPI)}\quad \\
+port 4533 & port 8080 \\
+\hline
+\end{tabular}
+\\[4pt]
+$\downarrow$ \textit{music files} \qquad\qquad
+$\downarrow$ \textit{session / u\_long cache}
+\quad $\downarrow$ \textit{interaction logs}
+\quad $\downarrow$ \textit{model artifacts}
+\\[4pt]
+\begin{tabular}{|c|c|c|}
+\hline
+\quad\textbf{S3}\quad & \quad\textbf{Redis}\quad & \quad\textbf{PostgreSQL}\quad \\
+artifacts + audio & in-request cache & persistent store \\
+\hline
+\end{tabular}
+\end{center}
+
+% =============================================================================
+\section{Deployment Topology}
+% =============================================================================
+
+\subsection{Virtual Machines}
+
+The system uses two VMs:
+
+\begin{longtable}{@{}llp{7cm}@{}}
+\toprule
+VM & Role & Services \\
+\midrule
+\textbf{proj23-training-part} (persistent) &
+  Serving + storage &
+  Navidrome, Recommendation API, Redis, PostgreSQL, MLflow \\[4pt]
+\textbf{proj23-training} (GPU, ephemeral) &
+  Model training &
+  PyTorch training jobs; \texttt{MLFLOW\_TRACKING\_URI} points to persistent VM \\
+\bottomrule
+\end{longtable}
+
+\subsection{Docker Services on Persistent VM}
+
+All services run as Docker containers managed by \texttt{docker-compose}.
+
+\begin{longtable}{@{}lllp{5.5cm}@{}}
+\toprule
+Container & Image & Port & Purpose \\
+\midrule
+\texttt{navidrome} & \texttt{deluan/navidrome:latest} & 4533 &
+  Music streaming; Subsonic API for audio delivery and user auth \\[4pt]
+\texttt{rec-api} & custom FastAPI image & 8080 &
+  ML inference: C2 retrieval + C3 ranking; play event ingestion \\[4pt]
+\texttt{redis} & \texttt{redis:7-alpine} & 6379 &
+  In-memory session cache and u\_long cache \\[4pt]
+\texttt{postgres} & \texttt{postgres:16} & 5432 &
+  Interaction logs, user/track mapping tables \\[4pt]
+\texttt{mlflow} & custom MLflow image & 8000 &
+  Experiment tracking; backend = PostgreSQL; artifacts = S3 \\
+\bottomrule
+\end{longtable}
+
+\subsection{Persistent Storage}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item PostgreSQL data directory: \texttt{/mnt/persist/postgres\_data} (mounted volume)
+  \item Navidrome music library: \texttt{/mnt/persist/music} (mounted volume)
+  \item Navidrome database: \texttt{/mnt/persist/navidrome\_data} (mounted volume)
+\end{itemize}
+
+% =============================================================================
+\section{Online Serving Data Flow}
+% =============================================================================
+
+This section describes the complete lifecycle of a single user interaction, from a track
+finishing playback to the next recommendation being delivered.
+
+\subsection{Label Derivation from Playback Behaviour}
+
+Labels are derived \emph{client-side} using the browser's HTML5 Audio API.
+The web player attaches listeners to the \texttt{HTMLAudioElement}:
+
+\begin{itemize}[leftmargin=1.5em]
+  \item On \texttt{play} event: record \texttt{t\_start = audio.currentTime} and wall-clock
+        timestamp.
+  \item On \texttt{ended} event (natural completion): \texttt{play\_duration\_ms $\approx$
+        track\_duration\_ms} $\Rightarrow$ always \texttt{positive}.
+  \item On user skip / next-track / app close: read \texttt{audio.currentTime} at that moment
+        to obtain the actual seconds listened.
+\end{itemize}
+
+The computed \texttt{play\_duration\_ms} (how long the user actually listened) and
+\texttt{track\_duration\_ms} (total length of the track, from Navidrome metadata) are
+sent together in the \texttt{POST /event} body.  The server derives the label from the ratio
+$r = \text{play\_duration\_ms} / \text{track\_duration\_ms}$:
+\[
+  \text{label} =
+  \begin{cases}
+    \texttt{positive} & r \geq 0.80 \\
+    \texttt{skip}     & r \leq 0.20 \\
+    \texttt{neutral}  & \text{otherwise}
+  \end{cases}
+\]
+
+\note{\textbf{Note}: the server does \emph{not} store separate play-start / play-end
+timestamps.  The client is responsible for measuring elapsed playback time via
+\texttt{audio.currentTime}; the server only stores the pre-computed duration pair
+and the derived label.}
+
+\subsection{Step-by-Step Request Lifecycle}
+
+\begin{enumerate}[leftmargin=1.5em]
+
+  \item \textbf{Track finishes (or user skips).}
+        The web player reads \texttt{audio.currentTime} at the moment of skip or
+        \texttt{ended} event, computes \texttt{play\_duration\_ms}, and POSTs to the
+        Recommendation API:
+\begin{lstlisting}[language=json]
+POST /event
+{
+  "user_id": 1042,
+  "track_id": 58291,
+  "session_uuid": "a3f9...",
+  "play_duration_ms": 198000,
+  "track_duration_ms": 214000
+}
+\end{lstlisting}
+
+  \item \textbf{Recommendation API derives label} using the ratio formula defined in
+        Section~3.1.
+
+  \item \textbf{State updates (async, non-blocking).}
+        \begin{itemize}
+          \item \textbf{Redis}: append \texttt{(track\_id, label)} to
+                \texttt{session:\{user\_id\}}; cap list at 20 entries (matches $L=20$).
+          \item \textbf{PostgreSQL}: insert one row into \texttt{interactions}
+                (fire-and-forget; does not block the response).
+        \end{itemize}
+
+  \item \textbf{Client requests next $N$ recommendations.}
+\begin{lstlisting}
+GET /recommend?user_id=1042&n=10
+\end{lstlisting}
+
+  \item \textbf{Recommendation API assembles context.}
+        \begin{itemize}
+          \item Read \texttt{session:\{user\_id\}} from Redis
+                $\Rightarrow$ \texttt{session\_track\_ids}, \texttt{session\_labels}.
+          \item Read \texttt{ulong:\{user\_id\}} from Redis (128D vector, cached).
+                If cache miss: compute via nearest centroid from
+                \texttt{user\_centroids.pkl}; write back with TTL\,=\,24\,h.
+          \item Read \texttt{seen:\{user\_id\}} from Redis (recently served track set).
+        \end{itemize}
+
+  \item \textbf{C2 --- Multi-Recall Retrieval.}
+        \texttt{MultiRecallRetriever.retrieve(user\_id, session\_track\_ids, session\_labels)}
+        returns up to 200 \texttt{(track\_id, score)} pairs via three branches:
+        \begin{itemize}
+          \item Co-occurrence branch (up to 100): recency-weighted $C_\text{sess}$ + $C_\text{pl}$
+          \item Preference-NN branch (up to 80): dot-product against user centroids
+          \item Popularity fallback (up to 20): pre-sorted \texttt{pop\_scores.csv}
+        \end{itemize}
+        Candidates present in \texttt{seen:\{user\_id\}} are filtered out.
+
+  \item \textbf{C3 --- GRU Ranker scoring.}
+        \texttt{GRURankerInference.score(user\_id, session\_track\_ids, session\_labels, candidates)}
+        scores all candidates in a single batched forward pass and returns them sorted by
+        logit descending.
+
+  \item \textbf{Response.}
+        Top $N$ \texttt{track\_id}s are returned; the web player adds them to the playback queue
+        and fetches their audio streams from Navidrome using the Subsonic
+        \texttt{stream?id=\{navidrome\_track\_id\}} endpoint.
+        The returned track IDs are appended to \texttt{seen:\{user\_id\}} (TTL\,=\,1\,h).
+
+\end{enumerate}
+
+\subsection{Latency Budget}
+
+\begin{longtable}{@{}lrl@{}}
+\toprule
+Step & Target & Notes \\
+\midrule
+Redis session read & $<1\,\text{ms}$ & in-memory \\
+C2 retrieval & $<30\,\text{ms}$ & sparse matrix ops; embeddings in RAM \\
+C3 ranking (200 candidates) & $<50\,\text{ms}$ & CPU forward pass; batch size 200 \\
+PostgreSQL write (async) & --- & does not block response \\
+\midrule
+\textbf{Total (p99)} & $\mathbf{<150\,\text{ms}}$ & \\
+\bottomrule
+\end{longtable}
+
+% =============================================================================
+\section{Storage Architecture}
+% =============================================================================
+
+\subsection{Redis --- In-Request Cache}
+
+Redis holds all state needed to serve a recommendation request with sub-millisecond reads.
+No ML artifacts are stored in Redis; only small derived vectors and ID lists.
+
+\begin{longtable}{@{}lllp{4.5cm}@{}}
+\toprule
+Key pattern & Redis type & Value & TTL \\
+\midrule
+\texttt{session:\{user\_id\}} & List &
+  JSON-encoded \texttt{[(track\_id, label), \ldots]} capped at 20 &
+  8 hours (reset on new session) \\[4pt]
+\texttt{ulong:\{user\_id\}} & String &
+  Base64-encoded float32 array, shape (128,) &
+  24 hours \\[4pt]
+\texttt{seen:\{user\_id\}} & Set &
+  track\_ids served in the last hour &
+  1 hour \\
+\bottomrule
+\end{longtable}
+
+\paragraph{Session boundary.}
+A new session UUID is generated by the web player when the app starts or after 30 minutes
+of inactivity.  On session start, the existing \texttt{session:\{user\_id\}} key is deleted
+and a fresh list is created.
+
+\subsection{PostgreSQL --- Persistent Relational Store}
+
+PostgreSQL stores data that must survive VM restarts and is used for offline retraining.
+It is \emph{never} on the critical path of a live recommendation request.
+
+\subsubsection{Schema}
+
+\begin{lstlisting}[language=SQL]
+-- User mapping: Navidrome user_id <-> internal integer user_id
+CREATE TABLE users (
+    user_id          BIGSERIAL PRIMARY KEY,
+    navidrome_user_id VARCHAR(64) UNIQUE NOT NULL,
+    created_at       TIMESTAMP DEFAULT NOW()
+);
+
+-- Track mapping: Navidrome track_id <-> internal integer track_id
+-- track_id matches the row index in item2vec_track_to_row.json
+CREATE TABLE tracks (
+    track_id           INTEGER PRIMARY KEY,
+    navidrome_track_id VARCHAR(64) UNIQUE NOT NULL,
+    title              VARCHAR(512),
+    artist             VARCHAR(256),
+    duration_ms        INTEGER
+);
+
+-- Raw interaction log (source of truth for retraining)
+CREATE TABLE interactions (
+    id                BIGSERIAL PRIMARY KEY,
+    user_id           BIGINT    NOT NULL REFERENCES users(user_id),
+    track_id          INTEGER   NOT NULL REFERENCES tracks(track_id),
+    session_uuid      VARCHAR(36) NOT NULL,
+    play_duration_ms  INTEGER   NOT NULL,
+    track_duration_ms INTEGER   NOT NULL,
+    label             VARCHAR(8) NOT NULL,   -- positive / neutral / skip
+    created_at        TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_interactions_user_time
+    ON interactions (user_id, created_at DESC);
+CREATE INDEX idx_interactions_created
+    ON interactions (created_at DESC);
+\end{lstlisting}
+
+\subsubsection{Usage Pattern}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \textbf{Writes}: one row per play event, asynchronously via the Recommendation API.
+  \item \textbf{Reads}: batch export only (nightly cron → S3); never read at serving time.
+\end{itemize}
+
+\subsection{S3 --- Object Storage}
+
+All large binary artifacts and raw data exports live in S3.  The bucket
+\texttt{proj23-mlflow-artifacts} is organised as follows:
+
+\begin{lstlisting}
+proj23-mlflow-artifacts/
+|
+|-- artifacts/
+|   |-- item2vec/
+|   |   |-- item2vec_128d.npy           # (746609, 128) float32 embedding matrix (365 MB)
+|   |   |-- item2vec_track_to_row.json  # track_id -> row index (13 MB)
+|   |   `-- item2vec_catalog.csv        # canonical track list
+|   |
+|   |-- retriever/
+|   |   |-- cooc/
+|   |   |   |-- cooc_session.npz        # C_sess sparse CSR (8.2M nnz, 26 MB)
+|   |   |   `-- cooc_playlist.npz       # C_pl sparse CSR (9.1M nnz)
+|   |   |-- pref_nn/
+|   |   |   `-- user_centroids.pkl      # dict[user_id -> [(centroid, size)]] (110 MB)
+|   |   `-- popularity/
+|   |       `-- pop_scores.csv          # 746K tracks sorted by log(1+count)
+|   |
+|   `-- ranker/
+|       |-- gru_ranker.pt               # best model checkpoint (NDCG@5)
+|       `-- gru_ranker_config.json      # d_emb, n_layers, dropout, L
+|
+|-- interactions/
+|   |-- year=2026/month=04/day=14/
+|   |   `-- interactions_20260414.parquet
+|   `-- ...                             # one parquet file per day
+|
+`-- mlflow/                             # MLflow artifact store (auto-managed)
+    `-- <experiment_id>/<run_uuid>/artifacts/
+\end{lstlisting}
+
+\paragraph{Artifact loading at startup.}
+When the Recommendation API container starts, it downloads the four model artifacts
+(\texttt{item2vec\_128d.npy}, \texttt{item2vec\_track\_to\_row.json},
+\texttt{user\_centroids.pkl}, \texttt{gru\_ranker.pt}) from S3 into memory.
+Total startup RAM cost: $\approx 490\,\text{MB}$.
+
+% =============================================================================
+\section{Recommendation API Design}
+% =============================================================================
+
+The Recommendation API is a FastAPI service that exposes two endpoints.  It loads
+\texttt{MultiRecallRetriever} and \texttt{GRURankerInference} once at startup and
+keeps them in process memory.
+
+\subsection{Endpoints}
+
+\subsubsection{\texttt{POST /event} --- Ingest Play Event}
+
+\begin{lstlisting}[language=json]
+// Request body
+{
+  "user_id":          1042,
+  "track_id":         58291,
+  "session_uuid":     "a3f9c2d1-...",
+  "play_duration_ms": 198000,
+  "track_duration_ms": 214000
+}
+
+// Response 200
+{
+  "label": "positive"
+}
+\end{lstlisting}
+
+\textbf{Processing} (all synchronous except PostgreSQL write):
+\begin{enumerate}[leftmargin=1.5em, topsep=2pt]
+  \item Derive \texttt{label} from play ratio.
+  \item \texttt{RPUSH session:\{user\_id\} (track\_id, label)}; trim to last 20 entries.
+  \item Invalidate \texttt{ulong:\{user\_id\}} if new label is \texttt{positive}
+        (session mean may have shifted meaningfully).
+  \item Fire-and-forget INSERT into \texttt{interactions}.
+\end{enumerate}
+
+\subsubsection{\texttt{GET /recommend} --- Get Next Tracks}
+
+\begin{lstlisting}
+GET /recommend?user_id=1042&n=10
+\end{lstlisting}
+
+\begin{lstlisting}[language=json]
+// Response 200
+{
+  "user_id": 1042,
+  "recommendations": [
+    {"rank": 1, "track_id": 73812, "score": 2.341},
+    {"rank": 2, "track_id": 41205, "score": 1.987},
+    ...
+  ]
+}
+\end{lstlisting}
+
+\textbf{Processing}:
+\begin{enumerate}[leftmargin=1.5em, topsep=2pt]
+  \item Read session from Redis.
+  \item Resolve \texttt{u\_long} (Redis cache or compute from centroids).
+  \item C2: \texttt{MultiRecallRetriever.retrieve(\ldots)} $\to$ up to 200 candidates.
+  \item Filter out \texttt{seen:\{user\_id\}}.
+  \item C3: \texttt{GRURankerInference.score(\ldots)} $\to$ sorted list.
+  \item Return top $n$; add returned IDs to \texttt{SADD seen:\{user\_id\}}.
+\end{enumerate}
+
+\subsection{Navidrome $\leftrightarrow$ Track ID Mapping}
+
+Navidrome assigns its own opaque string IDs to tracks.  At library ingestion time, an
+admin script populates the \texttt{tracks} table by calling the Navidrome Subsonic API
+(\texttt{getMusicDirectory}) and matching each track's file path or MusicBrainz ID to a
+row in \texttt{item2vec\_track\_to\_row.json}.
+
+The web player always communicates with the Recommendation API using \emph{internal}
+\texttt{track\_id} (integer), and fetches audio streams from Navidrome using
+\emph{navidrome\_track\_id} (string), resolved via a local lookup table loaded at startup.
+
+% =============================================================================
+\section{Retraining Loop}
+% =============================================================================
+
+The retraining loop ensures the model stays aligned with evolving user preferences.
+It is fully automated via cron jobs on the persistent VM.
+
+\subsection{Overview}
+
+\begin{center}
+\begin{tabular}{ccccc}
+PostgreSQL & $\xrightarrow{\text{daily export}}$ & S3 parquet &
+$\xrightarrow{\text{weekly build}}$ & new training data \\
+& & & $\downarrow$ & \\
+& & updated artifacts & $\xleftarrow{\text{retrain}}$ & GPU VM \\
+& & $\downarrow$ & & \\
+& & Rec API hot-reload & & \\
+\end{tabular}
+\end{center}
+
+\subsection{Step 1: Daily Interaction Export (cron: 02:00 UTC)}
+
+A cron job on the persistent VM runs:
+
+\begin{lstlisting}[language=bash]
+# Export yesterday's interactions from PostgreSQL to S3
+DATE=$(date -d "yesterday" +%Y-%m-%d)
+docker exec postgres psql -U user -d appdb -c \
+  "COPY (SELECT * FROM interactions
+         WHERE created_at::date = '${DATE}')
+   TO STDOUT WITH CSV HEADER" \
+  | aws --endpoint-url ${S3_ENDPOINT} \
+        s3 cp - s3://proj23-mlflow-artifacts/interactions/year=.../
+\end{lstlisting}
+
+\subsection{Step 2: Weekly Feature Rebuild (cron: Sunday 03:00 UTC)}
+
+On the GPU VM (triggered via SSH or remote cron), the following pipeline runs:
+
+\begin{enumerate}[leftmargin=1.5em]
+  \item \textbf{Download new interactions} from S3 and merge with historical data.
+  \item \textbf{Rebuild user centroids}:
+\begin{lstlisting}[language=bash]
+uv run python -m src.retriever.pref_nn.build
+\end{lstlisting}
+  \item \textbf{Rebuild ranker training data}:
+\begin{lstlisting}[language=bash]
+uv run python -m src.ranker.data.build
+\end{lstlisting}
+  \item \textbf{Retrain GRU Ranker}:
+\begin{lstlisting}[language=bash]
+uv run python -m src.ranker.train \
+    --mlflow-experiment gru-ranker-weekly \
+    --run-name weekly-$(date +%Y%m%d)
+\end{lstlisting}
+  \item \textbf{Upload new artifacts} to S3:
+\begin{lstlisting}[language=bash]
+bash upload_results.sh
+\end{lstlisting}
+\end{enumerate}
+
+\subsection{Step 3: Model Hot-Reload on Serving VM}
+
+After new artifacts land in S3, the Recommendation API reloads the model without downtime:
+
+\begin{lstlisting}[language=bash]
+# On persistent VM
+docker exec rec-api python -c "
+import requests
+requests.post('http://localhost:8080/admin/reload')
+"
+\end{lstlisting}
+
+The \texttt{/admin/reload} endpoint re-instantiates \texttt{GRURankerInference} and
+\texttt{MultiRecallRetriever} from the latest S3 artifacts, then atomically swaps the
+references used by the request handlers.
+
+\subsection{Retraining Trigger Thresholds}
+
+\begin{longtable}{@{}llp{6cm}@{}}
+\toprule
+Trigger & Condition & Action \\
+\midrule
+Time-based & Every Sunday 03:00 UTC & Full retrain regardless of data volume \\
+Data-based & $>50{,}000$ new interactions & Force early retrain \\
+Metric-based & NDCG@5 drops $>5\%$ (monitored via MLflow) & Alert + manual retrain \\
+\bottomrule
+\end{longtable}
+
+% =============================================================================
+\section{Cold Start Handling}
+% =============================================================================
+
+\subsection{New User (no listening history)}
+
+\begin{itemize}[leftmargin=1.5em]
+  \item \texttt{user\_centroids} has no entry for this user.
+  \item \texttt{u\_long} is set to $\mathbf{0}_{128}$ (zero vector).
+  \item C2 falls back entirely to the popularity branch (20 tracks) and co-occurrence
+        seeded from the first played track's co-occurrence row.
+  \item After the first 3 positive interactions in a session, the session mean embedding
+        provides a meaningful \texttt{u\_long} approximation.
+\end{itemize}
+
+\subsection{New Track (not in item2vec catalog)}
+
+Since the music library is curator-controlled and all tracks are ingested before
+serving begins, this case should not occur in normal operation.  The admin
+ingestion script must verify that every uploaded track has a valid row in
+\texttt{item2vec\_track\_to\_row.json} before making it playable.  Tracks that fail
+this check are flagged as \texttt{not\_in\_catalog} and excluded from recommendations.
+
+% =============================================================================
+\section{Summary of Data Ownership}
+% =============================================================================
+
+\begin{longtable}{@{}lll@{}}
+\toprule
+Data & Store & Lifetime \\
+\midrule
+Current session context & Redis & 8 hours \\
+u\_long vector cache & Redis & 24 hours \\
+Recently served tracks & Redis & 1 hour \\
+\midrule
+User--Navidrome ID mapping & PostgreSQL & Permanent \\
+Track--Navidrome ID mapping & PostgreSQL & Permanent \\
+Raw interaction logs & PostgreSQL + S3 & Permanent \\
+\midrule
+Item2Vec embeddings & S3 (+ RAM at runtime) & Until next C1 retrain \\
+Co-occurrence matrices & S3 (+ RAM at runtime) & Until next C2 rebuild \\
+User centroids & S3 (+ RAM at runtime) & Until next weekly rebuild \\
+GRU Ranker weights & S3 (+ RAM at runtime) & Until next weekly retrain \\
+MLflow experiment records & PostgreSQL + S3 & Permanent \\
+\bottomrule
+\end{longtable}
+
+\end{document}

@@ -1,0 +1,45 @@
+{
+  "context_id": 0,
+  "user_id": 41504,
+  "ground_truth_id": 3351179,
+  "ranked_candidates": [
+    {
+      "rank": 1,
+      "track_id": 3351179,
+      "score": 0.613589,
+      "is_ground_truth": true
+    },
+    {
+      "rank": 2,
+      "track_id": 2228791,
+      "score": -7.126318,
+      "is_ground_truth": false
+    },
+    {
+      "rank": 3,
+      "track_id": 3260924,
+      "score": -7.319088,
+      "is_ground_truth": false
+    },
+    {
+      "rank": 4,
+      "track_id": 3142570,
+      "score": -7.596629,
+      "is_ground_truth": false
+    },
+    {
+      "rank": 5,
+      "track_id": 2422360,
+      "score": -8.597656,
+      "is_ground_truth": false
+    },
+    {
+      "rank": 6,
+      "track_id": 686332,
+      "score": -11.112351,
+      "is_ground_truth": false
+    }
+  ],
+  "ground_truth_rank": 1,
+  "ground_truth_in_top5": true
+}

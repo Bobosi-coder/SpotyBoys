@@ -1,0 +1,36 @@
+{
+  "context_id": 0,
+  "user_id": 41504,
+  "session_prefix": {
+    "track_ids": [
+      3351207,
+      3351181,
+      3351149,
+      3351170,
+      3351246,
+      3351176,
+      3351253,
+      3351202
+    ],
+    "labels": [
+      "positive",
+      "positive",
+      "positive",
+      "positive",
+      "positive",
+      "positive",
+      "positive",
+      "positive"
+    ],
+    "length": 8
+  },
+  "candidates": [
+    3351179,
+    3142570,
+    2228791,
+    2422360,
+    3260924,
+    686332
+  ],
+  "ground_truth_id": 3351179
+}

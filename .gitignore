@@ -51,3 +51,11 @@ docs/*
 **/*.md
 !README.md
 !**/README.md
+
+# Training artifacts (use S3 instead)
+artifacts/**/*.bin
+artifacts/**/*.pkl
+artifacts/**/*.npz
+artifacts/**/*.json
+logs/
+.ranker_build.pid
