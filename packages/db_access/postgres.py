@@ -247,6 +247,23 @@ class PostgresRepository:
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_app_serving_request_metrics_endpoint ON app.serving_request_metrics(endpoint, created_at)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_app_serving_metric_rollups_created ON app.serving_metric_rollups(window_name, created_at DESC)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_app_model_trigger_decisions_created ON app.model_trigger_decisions(decision_type, created_at DESC)")
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS app.ingestion_rejections (
+                        id            BIGSERIAL PRIMARY KEY,
+                        event_type    TEXT        NOT NULL,
+                        reasons       TEXT[]      NOT NULL,
+                        raw_payload   JSONB,
+                        created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_ingestion_rejections_event_type ON app.ingestion_rejections (event_type)"
+                )
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_ingestion_rejections_created_at ON app.ingestion_rejections (created_at DESC)"
+                )
 
     def list_playable_tracks(self) -> List[PlayableTrackRecord]:
         with self._connect() as conn:
