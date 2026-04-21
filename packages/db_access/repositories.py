@@ -35,6 +35,10 @@ class DemoRepository:
         self.rendered_impressions: Dict[str, Dict[str, Any]] = {}
         self.playback_events: Dict[str, Dict[str, Any]] = {}
         self.feedback_events: Dict[str, Dict[str, Any]] = {}
+        self.serving_request_metrics: Dict[str, Dict[str, Any]] = {}
+        self.serving_metric_rollups: Dict[str, Dict[str, Any]] = {}
+        self.model_trigger_decisions: Dict[str, Dict[str, Any]] = {}
+        self.model_versions: Dict[str, Dict[str, Any]] = {}
 
     @classmethod
     def from_fixture(cls, path: str | Path) -> "DemoRepository":
@@ -181,7 +185,70 @@ class DemoRepository:
         return None
 
     def register_active_model_version(self, model_version: str, serving_bundle_version: str, manifest_uri: str) -> None:
+        current = self.get_active_model_version()
+        if current and current["model_version"] != model_version:
+            self.model_versions[current["model_version"]]["is_active"] = False
+            self.model_versions[current["model_version"]]["status"] = "previous_good"
+            self.model_versions[current["model_version"]]["deactivated_at"] = datetime.now(timezone.utc).isoformat()
+        self.model_versions[model_version] = {
+            "model_version": model_version,
+            "serving_bundle_version": serving_bundle_version,
+            "manifest_uri": manifest_uri,
+            "activated_at": datetime.now(timezone.utc).isoformat(),
+            "is_active": True,
+            "status": "active",
+            "rollback_parent_version": current["model_version"] if current and current["model_version"] != model_version else None,
+        }
         return None
+
+    def get_active_model_version(self) -> Optional[Dict[str, Any]]:
+        for record in self.model_versions.values():
+            if record.get("is_active"):
+                return dict(record)
+        return None
+
+    def get_previous_good_model_version(self) -> Optional[Dict[str, Any]]:
+        candidates = [record for record in self.model_versions.values() if record.get("status") == "previous_good"]
+        if not candidates:
+            return None
+        return dict(sorted(candidates, key=lambda item: str(item.get("deactivated_at") or ""), reverse=True)[0])
+
+    def record_serving_request_metric(self, payload: Dict[str, Any]) -> None:
+        metric = dict(payload)
+        metric.setdefault("metric_id", f"metric_{len(self.serving_request_metrics) + 1}")
+        metric.setdefault("created_at", datetime.now(timezone.utc).isoformat())
+        self.serving_request_metrics[str(metric["metric_id"])] = metric
+
+    def get_monitoring_inputs(self, window_start: datetime, window_end: datetime) -> Dict[str, List[Dict[str, Any]]]:
+        return {
+            "request_metrics": list(self.serving_request_metrics.values()),
+            "recommendation_impressions": list(self.recommendation_impressions.values()),
+            "rendered_impressions": list(self.rendered_impressions.values()),
+            "playback_events": list(self.playback_events.values()),
+            "feedback_events": list(self.feedback_events.values()),
+        }
+
+    def write_serving_metric_rollup(self, payload: Dict[str, Any]) -> None:
+        self.serving_metric_rollups[str(payload["rollup_id"])] = dict(payload)
+
+    def latest_serving_metric_rollup(self, window_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        rows = list(self.serving_metric_rollups.values())
+        if window_name:
+            rows = [row for row in rows if row.get("window_name") == window_name]
+        if not rows:
+            return None
+        return dict(sorted(rows, key=lambda item: str(item.get("created_at") or item.get("window_end") or ""), reverse=True)[0])
+
+    def record_model_trigger_decision(self, payload: Dict[str, Any]) -> None:
+        self.model_trigger_decisions[str(payload["decision_id"])] = dict(payload)
+
+    def latest_model_trigger_decision(self, decision_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        rows = list(self.model_trigger_decisions.values())
+        if decision_type:
+            rows = [row for row in rows if row.get("decision_type") == decision_type]
+        if not rows:
+            return None
+        return dict(sorted(rows, key=lambda item: str(item.get("created_at") or ""), reverse=True)[0])
 
     def get_mapped_track_ids(self) -> set:
         return {tid for tid, t in self._tracks.items() if t.navidrome_track_id}

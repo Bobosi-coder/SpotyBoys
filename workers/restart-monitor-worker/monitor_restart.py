@@ -43,10 +43,16 @@ def check_and_restart() -> Optional[Dict[str, Any]]:
         marker_data = json.loads(marker_path.read_text(encoding="utf-8"))
         version = marker_data.get("serving_bundle_version", "unknown")
         model_version = marker_data.get("model_version", "unknown")
+        reason = marker_data.get("reason", "artifact_refresh")
+        from_model_version = marker_data.get("from_model_version")
+        to_model_version = marker_data.get("to_model_version")
 
         logger.info(f"🔄 Restart marker detected!")
+        logger.info(f"   Reason: {reason}")
         logger.info(f"   Model version: {model_version}")
         logger.info(f"   Serving bundle: {version}")
+        if from_model_version or to_model_version:
+            logger.info(f"   Version transition: {from_model_version or 'unknown'} -> {to_model_version or model_version}")
 
         # Execute docker restart via socket-mounted Docker CLI
         container = os.environ.get(
@@ -74,8 +80,11 @@ def check_and_restart() -> Optional[Dict[str, Any]]:
         restart_info = {
             "status": "completed",
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "reason": reason,
             "model_version": model_version,
             "serving_bundle_version": version,
+            "from_model_version": from_model_version,
+            "to_model_version": to_model_version or model_version,
         }
         logger.info(f"✅ Restart completed: {restart_info}")
 

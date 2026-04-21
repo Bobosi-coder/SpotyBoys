@@ -1,0 +1,10 @@
+{
+  "candidate": {
+    "recall_at_20": 0.501,
+    "mrr_at_20": 0.201
+  },
+  "baseline": {
+    "recall_at_20": 0.5,
+    "mrr_at_20": 0.2
+  }
+}

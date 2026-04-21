@@ -1,5 +1,3 @@
-name: spotyboys_service
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -229,6 +227,40 @@ services:
       SPOTIBOYS_OBJECT_STORAGE_ROOT: /object-storage
     volumes:
       - /mnt/mlflow_persist/spotiboys/object-storage:/object-storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  serving-monitor-worker:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "workers/serving-monitor-worker/rollup_metrics.py", "--window", "5m", "--window", "1h", "--print-json"]
+    profiles: ["jobs"]
+    environment:
+      SPOTIBOYS_RUNTIME_MODE: postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  rollback-check-worker:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "workers/rollback-check-worker/check_rollback.py"]
+    profiles: ["jobs"]
+    environment:
+      SPOTIBOYS_RUNTIME_MODE: postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
+      REDIS_URL: redis://redis:6379/0
+      SPOTIBOYS_OBJECT_STORAGE_ROOT: /object-storage
+      SPOTIBOYS_ACTIVE_ARTIFACT_ROOT: /serving-bundle
+      SPOTIBOYS_AUTO_ROLLBACK: ${SPOTIBOYS_AUTO_ROLLBACK:-false}
+    volumes:
+      - /mnt/mlflow_persist/spotiboys/object-storage:/object-storage
+      - /mnt/mlflow_persist/spotiboys/serving-bundle:/serving-bundle
     depends_on:
       postgres:
         condition: service_healthy

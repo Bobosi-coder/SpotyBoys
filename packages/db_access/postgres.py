@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -15,6 +17,7 @@ class PostgresRepository:
     def __init__(self, database_url: str) -> None:
         self.database_url = database_url
         self.ensure_auth_schema()
+        self.ensure_monitoring_schema()
 
     def _connect(self):
         import psycopg2
@@ -160,6 +163,91 @@ class PostgresRepository:
                     """
                 )
 
+    def ensure_monitoring_schema(self) -> None:
+        """Apply additive monitoring/trigger tables for existing VM volumes."""
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("ALTER TABLE app.model_versions ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'inactive'")
+                cur.execute("ALTER TABLE app.model_versions ADD COLUMN IF NOT EXISTS rollback_parent_version TEXT")
+                cur.execute("ALTER TABLE app.model_versions ADD COLUMN IF NOT EXISTS deactivated_at TIMESTAMPTZ")
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS app.serving_request_metrics (
+                        metric_id TEXT PRIMARY KEY,
+                        endpoint TEXT NOT NULL,
+                        request_id TEXT,
+                        session_id TEXT,
+                        user_id TEXT,
+                        model_version TEXT,
+                        serving_bundle_version TEXT,
+                        status TEXT NOT NULL,
+                        status_code INTEGER,
+                        latency_ms REAL NOT NULL CHECK (latency_ms >= 0),
+                        latency_c2_ms REAL,
+                        latency_c3_ms REAL,
+                        latency_c4_ms REAL,
+                        candidate_count INTEGER,
+                        final_count INTEGER,
+                        playable_drop_count INTEGER,
+                        fallback_level TEXT,
+                        error_type TEXT,
+                        metrics_json JSONB NOT NULL DEFAULT '{}',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS app.serving_metric_rollups (
+                        rollup_id TEXT PRIMARY KEY,
+                        window_name TEXT NOT NULL,
+                        window_start TIMESTAMPTZ NOT NULL,
+                        window_end TIMESTAMPTZ NOT NULL,
+                        model_version TEXT NOT NULL,
+                        request_count INTEGER NOT NULL DEFAULT 0,
+                        recommendation_request_count INTEGER NOT NULL DEFAULT 0,
+                        stream_request_count INTEGER NOT NULL DEFAULT 0,
+                        error_rate REAL NOT NULL DEFAULT 0,
+                        fallback_rate REAL NOT NULL DEFAULT 0,
+                        p50_latency_ms REAL,
+                        p95_latency_ms REAL,
+                        stream_failure_rate REAL NOT NULL DEFAULT 0,
+                        event_ingestion_count INTEGER NOT NULL DEFAULT 0,
+                        impression_count INTEGER NOT NULL DEFAULT 0,
+                        playback_start_count INTEGER NOT NULL DEFAULT 0,
+                        skip_rate REAL NOT NULL DEFAULT 0,
+                        completion_rate REAL NOT NULL DEFAULT 0,
+                        dislike_rate REAL NOT NULL DEFAULT 0,
+                        unique_track_count INTEGER NOT NULL DEFAULT 0,
+                        unique_artist_count INTEGER NOT NULL DEFAULT 0,
+                        top_artist_share REAL NOT NULL DEFAULT 0,
+                        repeat_violation_count INTEGER NOT NULL DEFAULT 0,
+                        sample_status TEXT NOT NULL DEFAULT 'insufficient_sample',
+                        metrics_json JSONB NOT NULL DEFAULT '{}',
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS app.model_trigger_decisions (
+                        decision_id TEXT PRIMARY KEY,
+                        decision_type TEXT NOT NULL CHECK (decision_type IN ('promotion', 'rollback')),
+                        model_version TEXT,
+                        candidate_version TEXT,
+                        decision TEXT NOT NULL,
+                        reason TEXT NOT NULL,
+                        metrics_json JSONB NOT NULL DEFAULT '{}',
+                        artifact_uri TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                    """
+                )
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_app_serving_request_metrics_created ON app.serving_request_metrics(created_at)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_app_serving_request_metrics_endpoint ON app.serving_request_metrics(endpoint, created_at)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_app_serving_metric_rollups_created ON app.serving_metric_rollups(window_name, created_at DESC)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_app_model_trigger_decisions_created ON app.model_trigger_decisions(decision_type, created_at DESC)")
+
     def list_playable_tracks(self) -> List[PlayableTrackRecord]:
         with self._connect() as conn:
             with conn.cursor() as cur:
@@ -210,20 +298,79 @@ class PostgresRepository:
     def register_active_model_version(self, model_version: str, serving_bundle_version: str, manifest_uri: str) -> None:
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("UPDATE app.model_versions SET is_active = FALSE WHERE is_active = TRUE")
+                cur.execute("SELECT model_version FROM app.model_versions WHERE is_active = TRUE LIMIT 1")
+                row = cur.fetchone()
+                previous_model_version = str(row[0]) if row and row[0] != model_version else None
+                if previous_model_version:
+                    cur.execute(
+                        """
+                        UPDATE app.model_versions
+                        SET is_active = FALSE,
+                            status = 'previous_good',
+                            deactivated_at = NOW()
+                        WHERE is_active = TRUE
+                        """,
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE app.model_versions
+                        SET is_active = FALSE,
+                            status = CASE WHEN status = 'active' THEN 'inactive' ELSE status END,
+                            deactivated_at = COALESCE(deactivated_at, NOW())
+                        WHERE is_active = TRUE
+                          AND model_version <> %s
+                        """,
+                        (model_version,),
+                    )
                 cur.execute(
                     """
                     INSERT INTO app.model_versions
-                        (model_version, serving_bundle_version, manifest_uri, activated_at, is_active)
-                    VALUES (%s, %s, %s, NOW(), TRUE)
+                        (model_version, serving_bundle_version, manifest_uri, activated_at, is_active, status, rollback_parent_version)
+                    VALUES (%s, %s, %s, NOW(), TRUE, 'active', %s)
                     ON CONFLICT (model_version) DO UPDATE SET
                         serving_bundle_version = EXCLUDED.serving_bundle_version,
                         manifest_uri = EXCLUDED.manifest_uri,
                         activated_at = NOW(),
-                        is_active = TRUE
+                        is_active = TRUE,
+                        status = 'active',
+                        rollback_parent_version = COALESCE(app.model_versions.rollback_parent_version, EXCLUDED.rollback_parent_version),
+                        deactivated_at = NULL
                     """,
-                    (model_version, serving_bundle_version, manifest_uri),
+                    (model_version, serving_bundle_version, manifest_uri, previous_model_version),
                 )
+
+    def get_active_model_version(self) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT model_version, serving_bundle_version, manifest_uri, activated_at,
+                           is_active, status, rollback_parent_version, deactivated_at
+                    FROM app.model_versions
+                    WHERE is_active = TRUE
+                    ORDER BY activated_at DESC NULLS LAST
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+        return self._model_version_row(row) if row else None
+
+    def get_previous_good_model_version(self) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT model_version, serving_bundle_version, manifest_uri, activated_at,
+                           is_active, status, rollback_parent_version, deactivated_at
+                    FROM app.model_versions
+                    WHERE status = 'previous_good'
+                    ORDER BY deactivated_at DESC NULLS LAST, activated_at DESC NULLS LAST
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+        return self._model_version_row(row) if row else None
 
     def get_mapped_track_ids(self) -> set:
         """Return the set of track_ids that already have a navidrome mapping."""
@@ -676,6 +823,314 @@ class PostgresRepository:
                     (error, delta_version)
                 )
 
+    def record_serving_request_metric(self, payload: Dict[str, Any]) -> None:
+        data = to_jsonable(payload)
+        metric_id = str(data.get("metric_id") or f"metric_{uuid.uuid4().hex}")
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.serving_request_metrics
+                        (metric_id, endpoint, request_id, session_id, user_id, model_version,
+                         serving_bundle_version, status, status_code, latency_ms, latency_c2_ms,
+                         latency_c3_ms, latency_c4_ms, candidate_count, final_count,
+                         playable_drop_count, fallback_level, error_type, metrics_json, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s)
+                    ON CONFLICT (metric_id) DO NOTHING
+                    """,
+                    (
+                        metric_id,
+                        data["endpoint"],
+                        data.get("request_id"),
+                        data.get("session_id"),
+                        data.get("user_id"),
+                        data.get("model_version"),
+                        data.get("serving_bundle_version"),
+                        data.get("status", "success"),
+                        data.get("status_code"),
+                        float(data.get("latency_ms") or 0),
+                        data.get("latency_c2_ms"),
+                        data.get("latency_c3_ms"),
+                        data.get("latency_c4_ms"),
+                        data.get("candidate_count"),
+                        data.get("final_count"),
+                        data.get("playable_drop_count"),
+                        data.get("fallback_level"),
+                        data.get("error_type"),
+                        dumps(data.get("metrics", data.get("metrics_json", {}))),
+                        data.get("created_at") or datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+
+    def get_monitoring_inputs(self, window_start: datetime, window_end: datetime) -> Dict[str, List[Dict[str, Any]]]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT metric_id, endpoint, request_id, session_id, user_id, model_version,
+                           serving_bundle_version, status, status_code, latency_ms, candidate_count,
+                           final_count, playable_drop_count, fallback_level, error_type, metrics_json, created_at
+                    FROM app.serving_request_metrics
+                    WHERE created_at >= %s AND created_at < %s
+                    """,
+                    (window_start, window_end),
+                )
+                request_metrics = [
+                    {
+                        "metric_id": row[0],
+                        "endpoint": row[1],
+                        "request_id": row[2],
+                        "session_id": row[3],
+                        "user_id": row[4],
+                        "model_version": row[5],
+                        "serving_bundle_version": row[6],
+                        "status": row[7],
+                        "status_code": row[8],
+                        "latency_ms": row[9],
+                        "candidate_count": row[10],
+                        "final_count": row[11],
+                        "playable_drop_count": row[12],
+                        "fallback_level": row[13],
+                        "error_type": row[14],
+                        "metrics": row[15] or {},
+                        "created_at": row[16],
+                    }
+                    for row in cur.fetchall()
+                ]
+                cur.execute(
+                    """
+                    SELECT impression_id, request_id, session_id, user_id, model_version,
+                           fallback_level, browse_surface_json, queue_json, created_at
+                    FROM app.recommendation_impressions
+                    WHERE created_at >= %s AND created_at < %s
+                    """,
+                    (window_start, window_end),
+                )
+                recommendation_impressions = [
+                    {
+                        "impression_id": row[0],
+                        "request_id": row[1],
+                        "session_id": row[2],
+                        "user_id": row[3],
+                        "model_version": row[4],
+                        "fallback_level": row[5],
+                        "browse_surface": row[6] or {},
+                        "queue": row[7] or {},
+                        "created_at": row[8],
+                    }
+                    for row in cur.fetchall()
+                ]
+                cur.execute(
+                    """
+                    SELECT impression_id, request_id, session_id, user_id, surface,
+                           visible_items_json, rendered_at, received_at
+                    FROM app.rendered_impressions
+                    WHERE received_at >= %s AND received_at < %s
+                    """,
+                    (window_start, window_end),
+                )
+                rendered_impressions = [
+                    {
+                        "impression_id": row[0],
+                        "request_id": row[1],
+                        "session_id": row[2],
+                        "user_id": row[3],
+                        "surface": row[4],
+                        "visible_items": row[5] or [],
+                        "rendered_at": row[6],
+                        "received_at": row[7],
+                    }
+                    for row in cur.fetchall()
+                ]
+                cur.execute(
+                    """
+                    SELECT event_id, event_type, session_id, user_id, track_id, request_id,
+                           impression_id, position_ms, playback_ms, occurred_at, client_event_seq, received_at
+                    FROM app.playback_events
+                    WHERE received_at >= %s AND received_at < %s
+                    """,
+                    (window_start, window_end),
+                )
+                playback_events = [
+                    {
+                        "event_id": row[0],
+                        "event_type": row[1],
+                        "session_id": row[2],
+                        "user_id": row[3],
+                        "track_id": row[4],
+                        "request_id": row[5],
+                        "impression_id": row[6],
+                        "position_ms": row[7],
+                        "playback_ms": row[8],
+                        "occurred_at": row[9],
+                        "client_event_seq": row[10],
+                        "received_at": row[11],
+                    }
+                    for row in cur.fetchall()
+                ]
+                cur.execute(
+                    """
+                    SELECT event_id, feedback_type, session_id, user_id, track_id, request_id,
+                           impression_id, occurred_at, received_at
+                    FROM app.feedback_events
+                    WHERE received_at >= %s AND received_at < %s
+                    """,
+                    (window_start, window_end),
+                )
+                feedback_events = [
+                    {
+                        "event_id": row[0],
+                        "feedback_type": row[1],
+                        "session_id": row[2],
+                        "user_id": row[3],
+                        "track_id": row[4],
+                        "request_id": row[5],
+                        "impression_id": row[6],
+                        "occurred_at": row[7],
+                        "received_at": row[8],
+                    }
+                    for row in cur.fetchall()
+                ]
+        return {
+            "request_metrics": request_metrics,
+            "recommendation_impressions": recommendation_impressions,
+            "rendered_impressions": rendered_impressions,
+            "playback_events": playback_events,
+            "feedback_events": feedback_events,
+        }
+
+    def write_serving_metric_rollup(self, payload: Dict[str, Any]) -> None:
+        data = to_jsonable(payload)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.serving_metric_rollups
+                        (rollup_id, window_name, window_start, window_end, model_version,
+                         request_count, recommendation_request_count, stream_request_count,
+                         error_rate, fallback_rate, p50_latency_ms, p95_latency_ms,
+                         stream_failure_rate, event_ingestion_count, impression_count,
+                         playback_start_count, skip_rate, completion_rate, dislike_rate,
+                         unique_track_count, unique_artist_count, top_artist_share,
+                         repeat_violation_count, sample_status, metrics_json)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb)
+                    ON CONFLICT (rollup_id) DO UPDATE SET
+                        metrics_json = EXCLUDED.metrics_json,
+                        created_at = NOW()
+                    """,
+                    (
+                        data["rollup_id"],
+                        data["window_name"],
+                        data["window_start"],
+                        data["window_end"],
+                        data["model_version"],
+                        data["request_count"],
+                        data["recommendation_request_count"],
+                        data["stream_request_count"],
+                        data["error_rate"],
+                        data["fallback_rate"],
+                        data.get("p50_latency_ms"),
+                        data.get("p95_latency_ms"),
+                        data["stream_failure_rate"],
+                        data["event_ingestion_count"],
+                        data["impression_count"],
+                        data["playback_start_count"],
+                        data["skip_rate"],
+                        data["completion_rate"],
+                        data["dislike_rate"],
+                        data["unique_track_count"],
+                        data["unique_artist_count"],
+                        data["top_artist_share"],
+                        data["repeat_violation_count"],
+                        data["sample_status"],
+                        dumps(data.get("metrics", data.get("metrics_json", {}))),
+                    ),
+                )
+
+    def latest_serving_metric_rollup(self, window_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                where = "WHERE window_name = %s" if window_name else ""
+                params = (window_name,) if window_name else ()
+                cur.execute(
+                    f"""
+                    SELECT rollup_id, window_name, window_start, window_end, model_version,
+                           request_count, recommendation_request_count, stream_request_count,
+                           error_rate, fallback_rate, p50_latency_ms, p95_latency_ms,
+                           stream_failure_rate, event_ingestion_count, impression_count,
+                           playback_start_count, skip_rate, completion_rate, dislike_rate,
+                           unique_track_count, unique_artist_count, top_artist_share,
+                           repeat_violation_count, sample_status, metrics_json, created_at
+                    FROM app.serving_metric_rollups
+                    {where}
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
+        return self._rollup_row(row) if row else None
+
+    def record_model_trigger_decision(self, payload: Dict[str, Any]) -> None:
+        data = to_jsonable(payload)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.model_trigger_decisions
+                        (decision_id, decision_type, model_version, candidate_version,
+                         decision, reason, metrics_json, artifact_uri, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s)
+                    ON CONFLICT (decision_id) DO UPDATE SET
+                        decision = EXCLUDED.decision,
+                        reason = EXCLUDED.reason,
+                        metrics_json = EXCLUDED.metrics_json,
+                        artifact_uri = EXCLUDED.artifact_uri
+                    """,
+                    (
+                        data["decision_id"],
+                        data["decision_type"],
+                        data.get("model_version"),
+                        data.get("candidate_version"),
+                        data["decision"],
+                        data["reason"],
+                        dumps(data.get("metrics", data.get("metrics_json", {}))),
+                        data.get("artifact_uri"),
+                        data.get("created_at") or datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
+
+    def latest_model_trigger_decision(self, decision_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                where = "WHERE decision_type = %s" if decision_type else ""
+                params = (decision_type,) if decision_type else ()
+                cur.execute(
+                    f"""
+                    SELECT decision_id, decision_type, model_version, candidate_version,
+                           decision, reason, metrics_json, artifact_uri, created_at
+                    FROM app.model_trigger_decisions
+                    {where}
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "decision_id": row[0],
+            "decision_type": row[1],
+            "model_version": row[2],
+            "candidate_version": row[3],
+            "decision": row[4],
+            "reason": row[5],
+            "metrics": row[6] or {},
+            "artifact_uri": row[7],
+            "created_at": row[8].isoformat() if hasattr(row[8], "isoformat") else row[8],
+        }
+
     @staticmethod
     def _record_from_row(row: Iterable[Any]) -> PlayableTrackRecord:
         (
@@ -702,3 +1157,85 @@ class PostgresRepository:
             availability_status=str(availability_status or "unknown"),
             quarantine_reason=quarantine_reason,
         )
+
+    @staticmethod
+    def _model_version_row(row: Iterable[Any]) -> Dict[str, Any]:
+        (
+            model_version,
+            serving_bundle_version,
+            manifest_uri,
+            activated_at,
+            is_active,
+            status,
+            rollback_parent_version,
+            deactivated_at,
+        ) = row
+        return {
+            "model_version": model_version,
+            "serving_bundle_version": serving_bundle_version,
+            "manifest_uri": manifest_uri,
+            "activated_at": activated_at.isoformat() if hasattr(activated_at, "isoformat") else activated_at,
+            "is_active": bool(is_active),
+            "status": status,
+            "rollback_parent_version": rollback_parent_version,
+            "deactivated_at": deactivated_at.isoformat() if hasattr(deactivated_at, "isoformat") else deactivated_at,
+        }
+
+    @staticmethod
+    def _rollup_row(row: Iterable[Any]) -> Dict[str, Any]:
+        (
+            rollup_id,
+            window_name,
+            window_start,
+            window_end,
+            model_version,
+            request_count,
+            recommendation_request_count,
+            stream_request_count,
+            error_rate,
+            fallback_rate,
+            p50_latency_ms,
+            p95_latency_ms,
+            stream_failure_rate,
+            event_ingestion_count,
+            impression_count,
+            playback_start_count,
+            skip_rate,
+            completion_rate,
+            dislike_rate,
+            unique_track_count,
+            unique_artist_count,
+            top_artist_share,
+            repeat_violation_count,
+            sample_status,
+            metrics_json,
+            created_at,
+        ) = row
+        return {
+            "rollup_id": rollup_id,
+            "window_name": window_name,
+            "window_start": window_start.isoformat() if hasattr(window_start, "isoformat") else window_start,
+            "window_end": window_end.isoformat() if hasattr(window_end, "isoformat") else window_end,
+            "model_version": model_version,
+            "request_count": request_count,
+            "recommendation_request_count": recommendation_request_count,
+            "stream_request_count": stream_request_count,
+            "error_rate": float(error_rate),
+            "fallback_rate": float(fallback_rate),
+            "p50_latency_ms": float(p50_latency_ms) if p50_latency_ms is not None else None,
+            "p95_latency_ms": float(p95_latency_ms) if p95_latency_ms is not None else None,
+            "stream_failure_rate": float(stream_failure_rate),
+            "event_ingestion_count": event_ingestion_count,
+            "impression_count": impression_count,
+            "playback_start_count": playback_start_count,
+            "skip_rate": float(skip_rate),
+            "completion_rate": float(completion_rate),
+            "dislike_rate": float(dislike_rate),
+            "unique_track_count": unique_track_count,
+            "unique_artist_count": unique_artist_count,
+            "top_artist_share": float(top_artist_share),
+            "repeat_violation_count": repeat_violation_count,
+            "sample_status": sample_status,
+            "metrics": metrics_json or {},
+            "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else created_at,
+        }

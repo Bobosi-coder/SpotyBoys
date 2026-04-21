@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -84,6 +86,49 @@ def ready() -> dict:
     }
 
 
+def _record_metric(
+    *,
+    endpoint: str,
+    started_at: float,
+    status: str,
+    status_code: int,
+    request_id: str | None = None,
+    session_id: str | None = None,
+    user_id: str | None = None,
+    fallback_level: str | None = None,
+    candidate_count: int | None = None,
+    final_count: int | None = None,
+    playable_drop_count: int | None = None,
+    error_type: str | None = None,
+    metrics: dict | None = None,
+) -> None:
+    try:
+        repository.record_serving_request_metric(
+            {
+                "metric_id": f"metric_{uuid.uuid4().hex}",
+                "endpoint": endpoint,
+                "request_id": request_id,
+                "session_id": session_id,
+                "user_id": user_id,
+                "model_version": serving_bundle.model_version,
+                "serving_bundle_version": serving_bundle.version,
+                "status": status,
+                "status_code": status_code,
+                "latency_ms": round((time.monotonic() - started_at) * 1000, 3),
+                "candidate_count": candidate_count,
+                "final_count": final_count,
+                "playable_drop_count": playable_drop_count,
+                "fallback_level": fallback_level,
+                "error_type": error_type,
+                "metrics": metrics or {},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+    except Exception:
+        # Monitoring must never break playback or recommendation serving.
+        return
+
+
 def _auth_response(auth_session) -> AuthResponse:
     return AuthResponse(
         user=AuthUser(
@@ -147,48 +192,85 @@ def auth_me(request: Request) -> AuthResponse:
 
 @app.get("/session/bootstrap", response_model=BootstrapResponse)
 def bootstrap(request: Request) -> BootstrapResponse:
+    started_at = time.monotonic()
+    auth_session = None
     auth_session = require_authenticated_session(request, repository)
-    queue = runtime_state.get_queue(auth_session.session_id)
-    if not queue.items:
-        browse_surface, queue_items = recommendation_service.build_bootstrap_surfaces(
-            auth_session.session_id,
-            auth_session.user_id,
+    request_id = f"req_bootstrap_{auth_session.session_id}"
+    try:
+        queue = runtime_state.get_queue(auth_session.session_id)
+        if not queue.items:
+            browse_surface, queue_items = recommendation_service.build_bootstrap_surfaces(
+                auth_session.session_id,
+                auth_session.user_id,
+            )
+            queue = runtime_state.set_queue(auth_session.session_id, queue_items)
+        else:
+            browse_surface, _ = recommendation_service.build_bootstrap_surfaces(auth_session.session_id, auth_session.user_id)
+        repository.persist_recommendation_impression(
+            f"imp_bootstrap_{auth_session.session_id}",
+            {
+                "request_id": request_id,
+                "session_id": auth_session.session_id,
+                "user_id": auth_session.user_id,
+                "model_version": recommendation_service.model_version,
+                "fallback_level": "none",
+                "browse_surface": browse_surface.dict(),
+                "queue": {"items": [item.dict() for item in queue.items], "revision": queue.revision},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
         )
-        queue = runtime_state.set_queue(auth_session.session_id, queue_items)
-    else:
-        browse_surface, _ = recommendation_service.build_bootstrap_surfaces(auth_session.session_id, auth_session.user_id)
-    repository.persist_recommendation_impression(
-        f"imp_bootstrap_{auth_session.session_id}",
-        {
-            "request_id": f"req_bootstrap_{auth_session.session_id}",
-            "session_id": auth_session.session_id,
-            "user_id": auth_session.user_id,
-            "model_version": recommendation_service.model_version,
-            "fallback_level": "none",
-            "browse_surface": browse_surface.dict(),
-            "queue": {"items": [item.dict() for item in queue.items], "revision": queue.revision},
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        },
-    )
-    return BootstrapResponse(
-        session_id=auth_session.session_id,
-        user_id=auth_session.user_id,
-        auth_state="authenticated",
-        browse_surface=browse_surface,
-        queue=QueueState(
-            items=queue.items,
+        _record_metric(
+            endpoint="recommendations.bootstrap",
+            started_at=started_at,
+            status="success",
+            status_code=200,
+            request_id=request_id,
+            session_id=auth_session.session_id,
+            user_id=auth_session.user_id,
             fallback_level=queue.fallback_level,
-            generated_at=queue.generated_at,
-            drawer_default_open=False,
-            revision=queue.revision,
-        ),
-        current_track=None,
-        degraded=DegradedState(logging=False, recommendations=False),
-    )
+            candidate_count=recommendation_service.last_pipeline_trace.c2_candidate_count
+            if recommendation_service.last_pipeline_trace
+            else None,
+            final_count=len(queue.items),
+            metrics={
+                "pipeline_trace": recommendation_service.last_pipeline_trace.__dict__
+                if recommendation_service.last_pipeline_trace
+                else None
+            },
+        )
+        return BootstrapResponse(
+            session_id=auth_session.session_id,
+            user_id=auth_session.user_id,
+            auth_state="authenticated",
+            browse_surface=browse_surface,
+            queue=QueueState(
+                items=queue.items,
+                fallback_level=queue.fallback_level,
+                generated_at=queue.generated_at,
+                drawer_default_open=False,
+                revision=queue.revision,
+            ),
+            current_track=None,
+            degraded=DegradedState(logging=False, recommendations=False),
+        )
+    except Exception as exc:
+        _record_metric(
+            endpoint="recommendations.bootstrap",
+            started_at=started_at,
+            status="error",
+            status_code=getattr(exc, "status_code", 500),
+            request_id=request_id,
+            session_id=auth_session.session_id if auth_session else None,
+            user_id=auth_session.user_id if auth_session else None,
+            error_type=type(exc).__name__,
+        )
+        raise
 
 
 @app.post("/recommendations/next")
 def recommendations_next(payload: RecommendationRequest, request: Request) -> dict:
+    started_at = time.monotonic()
+    auth_session = None
     auth_session = require_authenticated_session(request, repository)
     authenticated_payload = RecommendationRequest(
         session_id=auth_session.session_id,
@@ -197,7 +279,35 @@ def recommendations_next(payload: RecommendationRequest, request: Request) -> di
         seed_track_ids=payload.seed_track_ids,
         queue_revision=payload.queue_revision,
     )
-    return recommendation_service.recommend_next(authenticated_payload).dict()
+    try:
+        response = recommendation_service.recommend_next(authenticated_payload)
+        trace = recommendation_service.last_pipeline_trace
+        _record_metric(
+            endpoint="recommendations.next",
+            started_at=started_at,
+            status="success",
+            status_code=200,
+            request_id=response.request_id,
+            session_id=auth_session.session_id,
+            user_id=auth_session.user_id,
+            fallback_level=response.fallback_level.value,
+            candidate_count=trace.c2_candidate_count if trace else None,
+            final_count=len(response.queue.items),
+            metrics={"pipeline_trace": trace.__dict__ if trace else None},
+        )
+        return response.dict()
+    except Exception as exc:
+        _record_metric(
+            endpoint="recommendations.next",
+            started_at=started_at,
+            status="error",
+            status_code=getattr(exc, "status_code", 500),
+            request_id=authenticated_payload.request_id,
+            session_id=auth_session.session_id if auth_session else None,
+            user_id=auth_session.user_id if auth_session else None,
+            error_type=type(exc).__name__,
+        )
+        raise
 
 
 @app.get("/playable-track/{track_id}")
@@ -211,12 +321,48 @@ def playable_track(track_id: str, request: Request) -> dict:
 
 @app.get("/stream/{track_id}")
 def stream(track_id: str, request: Request) -> Response:
-    require_authenticated_session(request, repository)
+    started_at = time.monotonic()
+    auth_session = require_authenticated_session(request, repository)
     try:
         payload, media_type = media_service.stream_bytes(track_id)
     except LookupError as exc:
+        _record_metric(
+            endpoint="stream.proxy",
+            started_at=started_at,
+            status="error",
+            status_code=404,
+            session_id=auth_session.session_id,
+            user_id=auth_session.user_id,
+            error_type=type(exc).__name__,
+            metrics={"track_id": track_id},
+        )
         raise HTTPException(status_code=404, detail=str(exc))
+    _record_metric(
+        endpoint="stream.proxy",
+        started_at=started_at,
+        status="success",
+        status_code=200,
+        session_id=auth_session.session_id,
+        user_id=auth_session.user_id,
+        metrics={"track_id": track_id, "media_type": media_type, "byte_count": len(payload)},
+    )
     return Response(content=payload, media_type=media_type)
+
+
+@app.get("/monitoring/summary")
+def monitoring_summary(request: Request) -> dict:
+    require_authenticated_session(request, repository)
+    return {
+        "status": "ok",
+        "active_model": repository.get_active_model_version(),
+        "serving_bundle_version": serving_bundle.version,
+        "model_version": serving_bundle.model_version,
+        "latest_5m_rollup": repository.latest_serving_metric_rollup("5m"),
+        "latest_1h_rollup": repository.latest_serving_metric_rollup("1h"),
+        "latest_promotion_decision": repository.latest_model_trigger_decision("promotion"),
+        "latest_rollback_decision": repository.latest_model_trigger_decision("rollback"),
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @app.get("/admin/data-quality")

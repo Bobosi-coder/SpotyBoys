@@ -9,6 +9,7 @@ from typing import Optional
 
 from packages.artifact_runtime import validate_serving_bundle_directory
 from packages.config import load_config
+from packages.db_access.factory import build_repository_and_runtime
 
 
 ACTIVE_ARTIFACT_ROOT = Path(os.environ.get("SPOTIBOYS_ACTIVE_ARTIFACT_ROOT", "/serving-bundle"))
@@ -46,6 +47,22 @@ def refresh_artifacts(version: Optional[str] = None) -> Path:
         + "\n",
         encoding="utf-8",
     )
+    try:
+        repository, _runtime = build_repository_and_runtime(config)
+        repository.record_model_trigger_decision(
+            {
+                "decision_id": f"promotion_consumed_{manifest['version']}",
+                "decision_type": "promotion",
+                "model_version": manifest["model_version"],
+                "candidate_version": manifest["version"],
+                "decision": "serving_refresh_staged",
+                "reason": "VM1 validated manifest-confirmed approved bundle and wrote restart marker",
+                "metrics": {"staged_bundle": str(destination)},
+                "artifact_uri": str(source / "manifest.json"),
+            }
+        )
+    except Exception:
+        pass
     return destination
 
 
