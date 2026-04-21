@@ -219,6 +219,17 @@ def stream(track_id: str, request: Request) -> Response:
     return Response(content=payload, media_type=media_type)
 
 
+@app.get("/admin/data-quality")
+def admin_data_quality() -> dict:
+    """Return the latest live data quality report (for demo/monitoring)."""
+    import json
+    reports_dir = config.object_storage_root / "quality_reports" / "live"
+    reports = sorted(reports_dir.glob("*.json")) if reports_dir.exists() else []
+    if not reports:
+        return {"status": "no_reports", "message": "No live quality reports found yet."}
+    return json.loads(reports[-1].read_text(encoding="utf-8"))
+
+
 @app.post("/admin/trigger-retrain")
 def admin_trigger_retrain() -> dict:
     """Force delta export + Airflow retraining DAG trigger (demo/manual use)."""

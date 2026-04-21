@@ -77,14 +77,25 @@ def monitor_live_data(window_hours: int = 24) -> Path:
         return _write_report(config.object_storage_root, payload)
 
     skip_rate = skip_count / max(playback_total, 1)
-    baseline_skip_rate = _baseline_skip_rate(config.object_storage_root)
-    skip_rate_abs_diff = abs(skip_rate - baseline_skip_rate)
+    completion_rate = completion_count / max(playback_total, 1)
+    like_rate = like_count / max(impression_count, 1)
+
+    baselines = _baselines(config.object_storage_root)
+    skip_rate_diff = abs(skip_rate - baselines["skip_rate"])
+    completion_rate_diff = abs(completion_rate - baselines["completion_rate"])
+    like_rate_diff = abs(like_rate - baselines["like_rate"])
 
     notes: list[str] = []
     status = "ok"
-    if skip_rate_abs_diff > 0.20:
+    if skip_rate_diff > 0.20:
         status = "warning"
-        notes.append("skip_rate drift exceeded threshold 0.20")
+        notes.append(f"skip_rate drift {skip_rate_diff:.3f} exceeded threshold 0.20")
+    if completion_rate_diff > 0.20:
+        status = "warning"
+        notes.append(f"completion_rate drift {completion_rate_diff:.3f} exceeded threshold 0.20")
+    if like_rate_diff > 0.10:
+        status = "warning"
+        notes.append(f"like_rate drift {like_rate_diff:.3f} exceeded threshold 0.10")
 
     payload = {
         "stage": "live_monitoring",
@@ -95,30 +106,40 @@ def monitor_live_data(window_hours: int = 24) -> Path:
             "recent_impression_count": impression_count,
             "recent_playback_count": playback_total,
             "recent_feedback_count": feedback_total,
-            "completion_rate": completion_count / max(playback_total, 1),
+            "completion_rate": completion_rate,
             "skip_rate": skip_rate,
-            "like_rate": like_count / max(impression_count, 1),
+            "like_rate": like_rate,
             "dislike_rate": dislike_count / max(impression_count, 1),
         },
-        "baseline": {"skip_rate": baseline_skip_rate},
-        "drift_checks": {"skip_rate_abs_diff": skip_rate_abs_diff},
+        "baseline": baselines,
+        "drift_checks": {
+            "skip_rate_abs_diff": skip_rate_diff,
+            "completion_rate_abs_diff": completion_rate_diff,
+            "like_rate_abs_diff": like_rate_diff,
+        },
         "notes": notes,
     }
     return _write_report(config.object_storage_root, payload)
 
 
-def _baseline_skip_rate(root: Path) -> float:
+def _baselines(root: Path) -> dict:
+    defaults = {
+        "skip_rate": float(os.environ.get("SPOTIBOYS_BASELINE_SKIP_RATE", "0.20")),
+        "completion_rate": float(os.environ.get("SPOTIBOYS_BASELINE_COMPLETION_RATE", "0.50")),
+        "like_rate": float(os.environ.get("SPOTIBOYS_BASELINE_LIKE_RATE", "0.05")),
+    }
     previous = sorted((root / "quality_reports" / "live").glob("*.json"))
     if previous:
         try:
             payload = json.loads(previous[-1].read_text(encoding="utf-8"))
             metrics = payload.get("metrics", {})
-            value = metrics.get("skip_rate")
-            if value is not None:
-                return float(value)
+            for key in defaults:
+                value = metrics.get(key)
+                if value is not None:
+                    defaults[key] = float(value)
         except Exception:
             pass
-    return float(os.environ.get("SPOTIBOYS_BASELINE_SKIP_RATE", "0.20"))
+    return defaults
 
 
 def _write_report(root: Path, payload: dict) -> Path:
