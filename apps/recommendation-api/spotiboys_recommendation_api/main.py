@@ -230,7 +230,7 @@ def admin_data_quality() -> dict:
     return json.loads(reports[-1].read_text(encoding="utf-8"))
 
 
-@app.post("/admin/trigger-retrain")
+@app.api_route("/admin/trigger-retrain", methods=["GET", "POST"])
 def admin_trigger_retrain() -> dict:
     """Force delta export + Airflow retraining DAG trigger (demo/manual use)."""
     import importlib.util
