@@ -1,5 +1,8 @@
 name: spotyboys_service
 
+x-recommendation-runtime: &recommendation-runtime
+  image: ${SPOTIBOYS_RECOMMENDATION_IMAGE:-spotiboys-vm1-recommendation-runtime:latest}
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -36,9 +39,7 @@ services:
       - "4533"
 
   navidrome-bootstrap:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
+    <<: *recommendation-runtime
     command: ["python", "infra/scripts/bootstrap_navidrome.py"]
     environment:
       NAVIDROME_BASE_URL: http://navidrome:4533
@@ -49,6 +50,7 @@ services:
         condition: service_started
 
   recommendation-api:
+    <<: *recommendation-runtime
     build:
       context: .
       dockerfile: apps/recommendation-api/Dockerfile
@@ -105,9 +107,7 @@ services:
         condition: service_healthy
 
   catalog-sync-worker:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
+    <<: *recommendation-runtime
     command: ["python", "workers/catalog-sync-worker/sync_catalog.py"]
     environment:
       SPOTIBOYS_RUNTIME_MODE: postgres
@@ -131,9 +131,7 @@ services:
         condition: service_completed_successfully
 
   outcome-deriver-worker:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
+    <<: *recommendation-runtime
     command: ["python", "workers/outcome-deriver-worker/derive_outcomes.py"]
     profiles: ["jobs"]
     environment:
@@ -143,9 +141,7 @@ services:
         condition: service_healthy
 
   parser-export-worker:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
+    <<: *recommendation-runtime
     command: ["python", "workers/parser-export-worker/export_delta.py"]
     profiles: ["jobs"]
     environment:
@@ -163,9 +159,7 @@ services:
         condition: service_healthy
 
   artifact-refresh-worker:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
+    <<: *recommendation-runtime
     command: ["python", "workers/artifact-refresh-worker/refresh_artifacts.py"]
     profiles: ["jobs"]
     environment:
@@ -176,9 +170,7 @@ services:
       - /mnt/mlflow_persist/spotiboys/serving-bundle:/serving-bundle
 
   artifact-fetch-worker:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
+    <<: *recommendation-runtime
     command: ["python", "workers/artifact-fetch-worker/fetch_remote_artifacts.py"]
     environment:
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
@@ -194,9 +186,7 @@ services:
       - /mnt/mlflow_persist/spotiboys/serving-bundle:/serving-bundle
 
   delta-trigger-worker:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
+    <<: *recommendation-runtime
     command: ["python", "workers/delta-trigger-worker/trigger_delta_export.py"]
     environment:
       SPOTIBOYS_RUNTIME_MODE: postgres
@@ -219,9 +209,7 @@ services:
         condition: service_healthy
 
   live-data-monitor-worker:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
+    <<: *recommendation-runtime
     command: ["python", "workers/live-data-monitor-worker/monitor_live_data.py"]
     environment:
       SPOTIBOYS_RUNTIME_MODE: postgres
@@ -234,11 +222,8 @@ services:
         condition: service_healthy
 
   serving-monitor-worker:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
-    command: ["python", "workers/serving-monitor-worker/rollup_metrics.py", "--window", "5m", "--window", "1h", "--print-json"]
-    profiles: ["jobs"]
+    <<: *recommendation-runtime
+    command: ["sh", "-c", "while true; do python workers/serving-monitor-worker/rollup_metrics.py --window 5m --window 1h --print-json || true; sleep ${SPOTIBOYS_SERVING_MONITOR_INTERVAL_SECONDS:-300}; done"]
     environment:
       SPOTIBOYS_RUNTIME_MODE: postgres
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
@@ -246,13 +231,12 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      recommendation-api:
+        condition: service_started
 
   rollback-check-worker:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
-    command: ["python", "workers/rollback-check-worker/check_rollback.py"]
-    profiles: ["jobs"]
+    <<: *recommendation-runtime
+    command: ["sh", "-c", "while true; do python workers/rollback-check-worker/check_rollback.py || true; sleep ${SPOTIBOYS_ROLLBACK_CHECK_INTERVAL_SECONDS:-300}; done"]
     environment:
       SPOTIBOYS_RUNTIME_MODE: postgres
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
@@ -266,11 +250,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      recommendation-api:
+        condition: service_started
+      serving-monitor-worker:
+        condition: service_started
 
   restart-monitor-worker:
-    build:
-      context: .
-      dockerfile: apps/recommendation-api/Dockerfile
+    <<: *recommendation-runtime
     command: ["python", "workers/restart-monitor-worker/monitor_restart.py"]
     profiles: ["jobs"]
     environment:
