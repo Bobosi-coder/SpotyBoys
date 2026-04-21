@@ -152,4 +152,20 @@ def _write_report(root: Path, payload: dict) -> Path:
 
 
 if __name__ == "__main__":
-    print(monitor_live_data())
+    import logging
+    import time
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    logger = logging.getLogger(__name__)
+
+    logger.info("Live data monitor started (hourly loop)")
+    while True:
+        try:
+            path = monitor_live_data()
+            logger.info(f"Quality report written: {path}")
+        except Exception as exc:
+            logger.error(f"Monitor cycle failed: {exc}", exc_info=True)
+        time.sleep(3600)

@@ -214,6 +214,21 @@ services:
       postgres:
         condition: service_healthy
 
+  live-data-monitor-worker:
+    build:
+      context: .
+      dockerfile: apps/recommendation-api/Dockerfile
+    command: ["python", "workers/live-data-monitor-worker/monitor_live_data.py"]
+    environment:
+      SPOTIBOYS_RUNTIME_MODE: postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
+      SPOTIBOYS_OBJECT_STORAGE_ROOT: /object-storage
+    volumes:
+      - /mnt/mlflow_persist/spotiboys/object-storage:/object-storage
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   restart-monitor-worker:
     build:
       context: .
