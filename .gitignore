@@ -1,32 +1,68 @@
-*.tar.gz
-data/
-
-# Environments
-venv/
-.env
-
-# Cache
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
-*.pyc
-.ipynb_checkpoints/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
 
-# Data and Models
-models/
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+.env
+.env.local
+.env.*.local
+
+# ── Lock files (generated, not cross-platform) ────────────────────────────────
+uv.lock
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# ── Editor / IDE ──────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Training artifacts (stored in S3, not git) ────────────────────────────────
 artifacts/
+/item2vec/
+/ranker/
+/retriever/
+/real_service/
+/models/
+/audio_cache/
 panns/
+
+# ── MLflow local state ────────────────────────────────────────────────────────
+mlruns/
+mlflow.db
+
+# ── Data directories ─────────────────────────────────────────────────────────
+data/
 *.mp3
 *.wav
 *.m4a
+*.flac
+*.ogg
+*.tar.gz
 
-# Logs
+# ── Build logs and process files ─────────────────────────────────────────────
 logs/
+*.log
+*.pid
+.ranker_build.pid
 
-# Analysis Docs
-doc/
+# ── Secrets ───────────────────────────────────────────────────────────────────
+*.pem
+*.key
 
-# OS Files
-.DS_Store
-
-
-mlruns/
-mlflow.db
+# ── Test / coverage output ────────────────────────────────────────────────────
+.pytest_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
