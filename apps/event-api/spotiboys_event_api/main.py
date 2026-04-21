@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from packages.auth import require_authenticated_session
 from packages.config import load_config
 from packages.db_access.factory import build_repository_and_runtime
+from packages.ingestion_quality import (
+    IngestionRejection,
+    validate_feedback,
+    validate_impression,
+    validate_playback,
+)
 from packages.shared_contracts.schemas import (
     EventAck,
     FeedbackEventRequest,
@@ -15,6 +22,8 @@ from packages.shared_contracts.schemas import (
     PlaybackEventRequest,
 )
 from packages.shared_contracts.enums import PlaybackEventType
+
+logger = logging.getLogger(__name__)
 
 config = load_config()
 repository, runtime_state = build_repository_and_runtime(config)
@@ -44,6 +53,13 @@ def impression_event(payload: ImpressionEventRequest, request: Request) -> Event
     authenticated_payload = payload.copy(
         update={"session_id": auth_session.session_id, "user_id": auth_session.user_id}
     )
+    try:
+        validate_impression(authenticated_payload.dict())
+    except IngestionRejection as exc:
+        logger.warning("impression rejected: %s", exc)
+        repository.persist_ingestion_rejection(exc.event_type, exc.reasons, exc.raw_payload)
+        raise HTTPException(status_code=422, detail={"rejection_reasons": exc.reasons})
+
     accepted = runtime_state.remember_once("idem:impression", authenticated_payload.impression_id)
     if accepted:
         repository.persist_rendered_impression(authenticated_payload.impression_id, authenticated_payload.dict())
@@ -56,6 +72,13 @@ def playback_event(payload: PlaybackEventRequest, request: Request) -> EventAck:
     authenticated_payload = payload.copy(
         update={"session_id": auth_session.session_id, "user_id": auth_session.user_id}
     )
+    try:
+        validate_playback(authenticated_payload.dict())
+    except IngestionRejection as exc:
+        logger.warning("playback event rejected: %s", exc)
+        repository.persist_ingestion_rejection(exc.event_type, exc.reasons, exc.raw_payload)
+        raise HTTPException(status_code=422, detail={"rejection_reasons": exc.reasons})
+
     accepted = runtime_state.remember_once("idem:playback", authenticated_payload.event_id)
     if accepted:
         repository.persist_playback_event(authenticated_payload.event_id, authenticated_payload.dict())
@@ -70,6 +93,13 @@ def feedback_event(payload: FeedbackEventRequest, request: Request) -> EventAck:
     authenticated_payload = payload.copy(
         update={"session_id": auth_session.session_id, "user_id": auth_session.user_id}
     )
+    try:
+        validate_feedback(authenticated_payload.dict())
+    except IngestionRejection as exc:
+        logger.warning("feedback event rejected: %s", exc)
+        repository.persist_ingestion_rejection(exc.event_type, exc.reasons, exc.raw_payload)
+        raise HTTPException(status_code=422, detail={"rejection_reasons": exc.reasons})
+
     accepted = runtime_state.remember_once("idem:feedback", authenticated_payload.event_id)
     if accepted:
         repository.persist_feedback_event(authenticated_payload.event_id, authenticated_payload.dict())

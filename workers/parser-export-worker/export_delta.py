@@ -149,66 +149,213 @@ def _write_parquet(path: Path, columns: List[str], rows: List[Tuple[Any, ...]]) 
 
 
 def validate_exported_delta_quality(output_dir: Path) -> Dict[str, Any]:
+    """Evaluate the quality of a compiled retraining delta before it is uploaded.
+
+    Set SPOTIBOYS_QG_ENABLED=false to bypass all checks (demo / emergency use).
+    The report is still written with status="disabled" so the audit trail is intact.
+
+    Status levels
+    -------------
+    ok   — all gates pass; retraining proceeds.
+    warn — soft thresholds breached; retraining proceeds but notes are logged.
+    fail — hard gates failed; delta-trigger-worker will NOT start retraining.
+
+    Threshold justification
+    -----------------------
+    All thresholds are overridable via environment variables (see below).
+    Defaults are intentionally low for demo / early-stage runs.
+    Set the env vars to production-recommended values before full deployment.
+
+    session_tracks_rows >= SPOTIBOYS_QG_SESSION_TRACKS_MIN  (default 5, prod 100)
+        Minimum viable batch.  In production, below 100 rows the GRU gradient
+        updates are too noisy; default is 5 to allow demo runs.
+
+    unique_user_count >= SPOTIBOYS_QG_UNIQUE_USERS_MIN  (default 2, prod 10)
+        Personalized retrieval requires signal from multiple users.  In
+        production, fewer than 10 users risks overfitting to individuals.
+
+    unique_track_count >= SPOTIBOYS_QG_UNIQUE_TRACKS_MIN  (default 3, prod 50)
+        Item2Vec and co-occurrence embeddings need catalog coverage.
+
+    null_rate_ids == 0  (SPOTIBOYS_QG_NULL_RATE_MAX, default 0.0 — not relaxed)
+        Null session_id / user_id / track_id corrupts the ID→embedding lookup;
+        this threshold is kept at 0 regardless of environment.
+
+    positive_label_rate >= SPOTIBOYS_QG_POSITIVE_LABEL_RATE_MIN  (default 0.01, prod 0.05)
+        Positive signal must be present for cross-entropy to converge.
+
+    skip_label_rate <= SPOTIBOYS_QG_SKIP_LABEL_RATE_MAX  (default 0.99, prod 0.95)
+        Dataset must not be almost entirely negative labels.
+
+    playratio_out_of_range_rate == 0  (SPOTIBOYS_QG_PLAYRATIO_OOR_MAX, default 0.0)
+        Values outside [0, 1] indicate an upstream computation bug.
+
+    duplicate_row_rate <= SPOTIBOYS_QG_DUPLICATE_RATE_WARN  (default 0.50, prod 0.10)
+        Soft warning only; retraining still proceeds.
+    """
+    if os.environ.get("SPOTIBOYS_QG_ENABLED", "true").lower() in {"0", "false", "no"}:
+        logger.warning("Quality gate DISABLED (SPOTIBOYS_QG_ENABLED=false); skipping all checks.")
+        return {
+            "stage": "retraining_dataset",
+            "status": "disabled",
+            "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+            "metrics": {},
+            "thresholds": {},
+            "notes": ["Quality gate bypassed via SPOTIBOYS_QG_ENABLED=false."],
+        }
+
     import pyarrow.parquet as pq
 
-    session_tracks = output_dir / "session_tracks_addition.parquet"
-    session_meta = output_dir / "session_meta_addition.parquet"
-    love = output_dir / "love_addition.parquet"
-    users = output_dir / "users_addition.parquet"
+    # ── load tables ──────────────────────────────────────────────────────────
+    st_table = pq.read_table(output_dir / "session_tracks_addition.parquet")
+    sm_table = pq.read_table(output_dir / "session_meta_addition.parquet")
+    love_table = pq.read_table(output_dir / "love_addition.parquet")
+    users_table = pq.read_table(output_dir / "users_addition.parquet")
 
-    session_tracks_table = pq.read_table(session_tracks)
-    session_meta_table = pq.read_table(session_meta)
-    love_table = pq.read_table(love)
-    users_table = pq.read_table(users)
+    # ── schema presence ───────────────────────────────────────────────────────
+    st_cols = set(st_table.column_names)
+    REQUIRED_ST_COLS = {"session_id", "user_id", "track_id", "playratio", "label"}
+    missing_cols = REQUIRED_ST_COLS - st_cols
 
-    label_counts = {"positive": 0, "neutral": 0, "skip": 0}
-    labels = session_tracks_table.column("label").to_pylist() if "label" in session_tracks_table.column_names else []
-    for label in labels:
-        if label in label_counts:
-            label_counts[str(label)] += 1
+    # ── label distribution ────────────────────────────────────────────────────
+    label_counts: Dict[str, int] = {"positive": 0, "neutral": 0, "skip": 0}
+    labels = st_table.column("label").to_pylist() if "label" in st_cols else []
+    for lbl in labels:
+        key = str(lbl)
+        if key in label_counts:
+            label_counts[key] += 1
 
-    session_track_rows = session_tracks_table.num_rows
-    total_labels = max(session_track_rows, 1)
-    user_ids = session_tracks_table.column("user_id").to_pylist() if "user_id" in session_tracks_table.column_names else []
-    track_ids = session_tracks_table.column("track_id").to_pylist() if "track_id" in session_tracks_table.column_names else []
+    st_rows = st_table.num_rows
+    denom = max(st_rows, 1)
+
+    # ── null rates on critical ID columns ────────────────────────────────────
+    def _null_rate(table: Any, col: str) -> float:
+        if col not in table.column_names:
+            return 1.0
+        vals = table.column(col).to_pylist()
+        return sum(1 for v in vals if v is None) / max(len(vals), 1)
+
+    null_session_id = _null_rate(st_table, "session_id")
+    null_user_id    = _null_rate(st_table, "user_id")
+    null_track_id   = _null_rate(st_table, "track_id")
+
+    # ── playratio range ───────────────────────────────────────────────────────
+    playratios = st_table.column("playratio").to_pylist() if "playratio" in st_cols else []
+    out_of_range = sum(1 for v in playratios if v is not None and not (0.0 <= float(v) <= 1.0))
+    playratio_out_of_range_rate = out_of_range / denom
+
+    # ── diversity ────────────────────────────────────────────────────────────
+    user_ids  = st_table.column("user_id").to_pylist()  if "user_id"  in st_cols else []
+    track_ids = st_table.column("track_id").to_pylist() if "track_id" in st_cols else []
+    unique_users  = len(set(u for u in user_ids  if u is not None))
+    unique_tracks = len(set(t for t in track_ids if t is not None))
+
+    # ── duplicate (session_id, track_id) pairs ────────────────────────────────
+    if "session_id" in st_cols and "track_id" in st_cols:
+        sid_list = st_table.column("session_id").to_pylist()
+        pairs = list(zip(sid_list, track_ids))
+        duplicate_rows = st_rows - len(set(pairs))
+        duplicate_row_rate = duplicate_rows / denom
+    else:
+        duplicate_rows = 0
+        duplicate_row_rate = 0.0
 
     metrics = {
-        "session_tracks_rows": session_track_rows,
-        "session_meta_rows": session_meta_table.num_rows,
-        "love_rows": love_table.num_rows,
-        "users_rows": users_table.num_rows,
-        "positive_label_rate": label_counts["positive"] / total_labels,
-        "neutral_label_rate": label_counts["neutral"] / total_labels,
-        "skip_label_rate": label_counts["skip"] / total_labels,
-        "unique_user_count": len(set(user_ids)),
-        "unique_track_count": len(set(track_ids)),
+        "session_tracks_rows":       st_rows,
+        "session_meta_rows":         sm_table.num_rows,
+        "love_rows":                 love_table.num_rows,
+        "users_rows":                users_table.num_rows,
+        "positive_label_rate":       label_counts["positive"] / denom,
+        "neutral_label_rate":        label_counts["neutral"]  / denom,
+        "skip_label_rate":           label_counts["skip"]     / denom,
+        "unique_user_count":         unique_users,
+        "unique_track_count":        unique_tracks,
+        "null_rate_session_id":      null_session_id,
+        "null_rate_user_id":         null_user_id,
+        "null_rate_track_id":        null_track_id,
+        "playratio_out_of_range_rate": playratio_out_of_range_rate,
+        "duplicate_row_rate":        duplicate_row_rate,
+        "missing_required_columns":  sorted(missing_cols),
     }
+
+    # Thresholds — all overridable via environment variables so that demo /
+    # staging environments can use lower values without touching production logic.
+    #
+    # Production-recommended values are shown in the comments.
+    # Default values are intentionally low to allow demo and early-stage runs.
+    # Set env vars (e.g. SPOTIBOYS_QG_SESSION_TRACKS_MIN=100) for production.
     thresholds = {
-        "session_tracks_rows_min": 1,
-        "session_meta_rows_min": 1,
-        "users_rows_min": 1,
-        "positive_label_rate_min": 0.05,
-        "skip_label_rate_max": 0.95,
+        "session_tracks_rows_min":         int(os.environ.get("SPOTIBOYS_QG_SESSION_TRACKS_MIN",         "5")),
+        "unique_user_count_min":           int(os.environ.get("SPOTIBOYS_QG_UNIQUE_USERS_MIN",           "2")),
+        "unique_track_count_min":          int(os.environ.get("SPOTIBOYS_QG_UNIQUE_TRACKS_MIN",          "3")),
+        "null_rate_ids_max":               float(os.environ.get("SPOTIBOYS_QG_NULL_RATE_MAX",            "0.0")),
+        "positive_label_rate_min":         float(os.environ.get("SPOTIBOYS_QG_POSITIVE_LABEL_RATE_MIN",  "0.01")),
+        "skip_label_rate_max":             float(os.environ.get("SPOTIBOYS_QG_SKIP_LABEL_RATE_MAX",      "0.99")),
+        "playratio_out_of_range_rate_max": float(os.environ.get("SPOTIBOYS_QG_PLAYRATIO_OOR_MAX",        "0.0")),
+        "duplicate_row_rate_warn":         float(os.environ.get("SPOTIBOYS_QG_DUPLICATE_RATE_WARN",      "0.50")),
     }
-    notes: list[str] = []
-    if metrics["session_tracks_rows"] < thresholds["session_tracks_rows_min"]:
-        notes.append("session_tracks_rows below threshold")
-    if metrics["session_meta_rows"] < thresholds["session_meta_rows_min"]:
-        notes.append("session_meta_rows below threshold")
-    if metrics["users_rows"] < thresholds["users_rows_min"]:
-        notes.append("users_rows below threshold")
+
+    fail_notes: List[str] = []
+    warn_notes: List[str] = []
+
+    if missing_cols:
+        fail_notes.append(f"missing required columns in session_tracks: {sorted(missing_cols)}")
+    if st_rows < thresholds["session_tracks_rows_min"]:
+        fail_notes.append(
+            f"session_tracks_rows={st_rows} < {thresholds['session_tracks_rows_min']} "
+            "(minimum viable training batch)"
+        )
+    if unique_users < thresholds["unique_user_count_min"]:
+        fail_notes.append(
+            f"unique_user_count={unique_users} < {thresholds['unique_user_count_min']} "
+            "(too few users for personalized training)"
+        )
+    if unique_tracks < thresholds["unique_track_count_min"]:
+        fail_notes.append(
+            f"unique_track_count={unique_tracks} < {thresholds['unique_track_count_min']} "
+            "(too few tracks for meaningful item embeddings)"
+        )
+    if null_session_id > thresholds["null_rate_ids_max"]:
+        fail_notes.append(f"null_rate_session_id={null_session_id:.4f} (must be 0; pipeline bug)")
+    if null_user_id > thresholds["null_rate_ids_max"]:
+        fail_notes.append(f"null_rate_user_id={null_user_id:.4f} (must be 0; pipeline bug)")
+    if null_track_id > thresholds["null_rate_ids_max"]:
+        fail_notes.append(f"null_rate_track_id={null_track_id:.4f} (must be 0; pipeline bug)")
     if metrics["positive_label_rate"] < thresholds["positive_label_rate_min"]:
-        notes.append("positive_label_rate below threshold")
+        fail_notes.append(
+            f"positive_label_rate={metrics['positive_label_rate']:.4f} < "
+            f"{thresholds['positive_label_rate_min']} (positive signal too sparse)"
+        )
     if metrics["skip_label_rate"] > thresholds["skip_label_rate_max"]:
-        notes.append("skip_label_rate exceeded threshold")
+        fail_notes.append(
+            f"skip_label_rate={metrics['skip_label_rate']:.4f} > "
+            f"{thresholds['skip_label_rate_max']} (dataset dominated by negatives)"
+        )
+    if playratio_out_of_range_rate > thresholds["playratio_out_of_range_rate_max"]:
+        fail_notes.append(
+            f"playratio_out_of_range_rate={playratio_out_of_range_rate:.4f} "
+            "(values outside [0,1] indicate upstream bug)"
+        )
+    if duplicate_row_rate > thresholds["duplicate_row_rate_warn"]:
+        warn_notes.append(
+            f"duplicate_row_rate={duplicate_row_rate:.4f} > "
+            f"{thresholds['duplicate_row_rate_warn']} (checkpoint cursor may be drifting)"
+        )
+
+    if fail_notes:
+        status = "fail"
+    elif warn_notes:
+        status = "warn"
+    else:
+        status = "ok"
 
     return {
         "stage": "retraining_dataset",
-        "status": "fail" if notes else "ok",
+        "status": status,
         "created_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
         "metrics": metrics,
         "thresholds": thresholds,
-        "notes": notes,
+        "notes": fail_notes + warn_notes,
     }
 
 

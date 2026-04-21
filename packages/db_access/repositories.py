@@ -106,6 +106,12 @@ class DemoRepository:
         self.feedback_events[event_id] = dict(payload)
         return True
 
+    def persist_ingestion_rejection(
+        self, event_type: str, reasons: List[str], raw_payload: Dict[str, Any]
+    ) -> None:
+        # In-memory demo mode: log only, no persistent store needed.
+        pass
+
     def create_user(self, user_id: str, email: str, password_hash: str, display_name: str) -> Dict[str, Any]:
         normalized = email.strip().lower()
         if normalized in self.users_by_email:

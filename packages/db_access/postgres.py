@@ -563,6 +563,20 @@ class PostgresRepository:
                 )
                 return cur.rowcount == 1
 
+    def persist_ingestion_rejection(
+        self, event_type: str, reasons: List[str], raw_payload: Dict[str, Any]
+    ) -> None:
+        safe_payload = to_jsonable(raw_payload)
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.ingestion_rejections (event_type, reasons, raw_payload)
+                    VALUES (%s, %s, %s::jsonb)
+                    """,
+                    (event_type, reasons, dumps(safe_payload)),
+                )
+
     def create_user(self, user_id: str, email: str, password_hash: str, display_name: str) -> Dict[str, Any]:
         normalized = email.strip().lower()
         with self._connect() as conn:

@@ -59,12 +59,21 @@ def check_and_trigger_delta_export(threshold: int = 1000) -> Optional[str]:
         quality_report_path = Path(result) / "quality_report.json"
         if quality_report_path.exists():
             quality_report = json.loads(quality_report_path.read_text(encoding="utf-8"))
-            if quality_report.get("status") == "fail":
+            q_status = quality_report.get("status", "unknown")
+            q_notes  = quality_report.get("notes", [])
+            if q_status == "disabled":
+                logger.warning("Quality gate DISABLED; retraining will proceed without checks.")
+            elif q_status == "fail":
                 logger.warning(
-                    "Delta export quality gate failed; retraining will not be triggered. "
-                    f"notes={quality_report.get('notes', [])}"
+                    "Delta export quality gate FAILED; retraining will not be triggered. "
+                    f"notes={q_notes}"
                 )
                 return str(result)
+            elif q_status == "warn":
+                logger.warning(
+                    "Delta export quality gate WARNING; retraining will proceed but review notes. "
+                    f"notes={q_notes}"
+                )
         else:
             logger.warning("Delta export quality report missing; retraining will not be triggered.")
             return str(result)
