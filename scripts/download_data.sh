@@ -67,7 +67,7 @@ log "Step 1: Item2vec artifacts"
 log "========================================================"
 
 for f in item2vec_128d.npy item2vec_track_to_row.json item2vec_catalog.csv \
-          item2vec_corpus.parquet playlist_tracks_i2v.parquet playlist_meta_i2v.parquet \
+          item2vec_corpus.parquet playlist_meta_i2v.parquet \
           item2vec_model.bin; do
     s3_download "Item2vec/${f}" "artifacts/item2vec/${f}"
 done
@@ -79,10 +79,11 @@ log "========================================================"
 log "Step 2: session_event snapshot"
 log "========================================================"
 
-s3_download "session_event/snapshot/session_tracks_i2v.parquet" "artifacts/item2vec/session_tracks_i2v.parquet"
-s3_download "session_event/snapshot/session_meta_i2v.parquet"   "artifacts/item2vec/session_meta_i2v.parquet"
-s3_download "session_event/snapshot/love_i2v.parquet"           "artifacts/item2vec/love_filtered_i2v.parquet"
-s3_download "session_event/snapshot/users_i2v.parquet"          "artifacts/item2vec/users_filtered_i2v.parquet"
+s3_download "session_event/snapshot/session_tracks_i2v.parquet"   "artifacts/item2vec/session_tracks_i2v.parquet"
+s3_download "session_event/snapshot/session_meta_i2v.parquet"     "artifacts/item2vec/session_meta_i2v.parquet"
+s3_download "session_event/snapshot/love_i2v.parquet"             "artifacts/item2vec/love_filtered_i2v.parquet"
+s3_download "session_event/snapshot/users_i2v.parquet"            "artifacts/item2vec/users_filtered_i2v.parquet"
+s3_download "session_event/snapshot/playlist_tracks_i2v.parquet"  "artifacts/item2vec/playlist_tracks_i2v.parquet"
 
 # --------------------------------------------------------------------------- #
 # Step 3a (no-delta): 下载现有 Retrieve/{VERSION}

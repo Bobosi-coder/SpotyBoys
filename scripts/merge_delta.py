@@ -10,12 +10,14 @@ Delta directory layout:
   /tmp/delta/{YYYYMMDD}/session_meta_addition.parquet
   /tmp/delta/{YYYYMMDD}/love_addition.parquet
   /tmp/delta/{YYYYMMDD}/users_addition.parquet
+  /tmp/delta/{YYYYMMDD}/playlist_tracks_addition.parquet  (optional, from online user playlists)
 
 Snapshot files (already in artifacts/item2vec/):
   session_tracks_i2v.parquet
   session_meta_i2v.parquet
-  love_filtered_i2v.parquet   ← love_i2v on S3
-  users_filtered_i2v.parquet  ← users_i2v on S3
+  love_filtered_i2v.parquet       ← love_i2v on S3
+  users_filtered_i2v.parquet      ← users_i2v on S3
+  playlist_tracks_i2v.parquet     ← Item2vec/ on S3
 """
 
 import sys
@@ -29,10 +31,11 @@ DELTA_ROOT = Path("/tmp/delta")
 
 # (snapshot local name, delta addition filename)
 MERGE_TARGETS = [
-    ("session_tracks_i2v.parquet",  "session_tracks_addition.parquet"),
-    ("session_meta_i2v.parquet",    "session_meta_addition.parquet"),
-    ("love_filtered_i2v.parquet",   "love_addition.parquet"),
-    ("users_filtered_i2v.parquet",  "users_addition.parquet"),
+    ("session_tracks_i2v.parquet",   "session_tracks_addition.parquet"),
+    ("session_meta_i2v.parquet",     "session_meta_addition.parquet"),
+    ("love_filtered_i2v.parquet",    "love_addition.parquet"),
+    ("users_filtered_i2v.parquet",   "users_addition.parquet"),
+    ("playlist_tracks_i2v.parquet",  "playlist_tracks_addition.parquet"),
 ]
 
 
