@@ -1,0 +1,25 @@
+--- a/ui/src/layout/Menu.jsx	2026-04-24 13:10:58
++++ b/ui/src/layout/Menu.jsx	2026-04-24 13:10:58
+@@ -9,6 +9,7 @@
+ import inflection from 'inflection'
+ import albumLists from '../album/albumLists'
+ import PlaylistsSubMenu from './PlaylistsSubMenu'
++import RecommendIcon from '@material-ui/icons/Queue'
+ import config from '../config'
+ 
+ const useStyles = makeStyles((theme) => ({
+@@ -137,6 +138,14 @@
+       ) : (
+         resources.filter(subItems('playlist')).map(renderResourceMenuItemLink)
+       )}
++      <MenuItemLink
++        to="/recommendations"
++        activeClassName={classes.active}
++        primaryText={translate('resources.recommendations.name', { _: 'Recommendations' })}
++        leftIcon={<RecommendIcon />}
++        sidebarIsOpen={open}
++        dense={dense}
++      />
+     </div>
+   )
+ }

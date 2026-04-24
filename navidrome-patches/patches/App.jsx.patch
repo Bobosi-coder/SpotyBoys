@@ -1,0 +1,18 @@
+--- a/ui/src/App.jsx	2026-04-24 13:10:48
++++ b/ui/src/App.jsx	2026-04-24 13:10:48
+@@ -16,6 +16,7 @@
+ import radio from './radio'
+ import share from './share'
+ import { Player } from './audioplayer'
++import SpotiboysEventBridge from './eventbridge/SpotiboysEventBridge'
+ import customRoutes from './routes'
+ import {
+   themeReducer,
+@@ -125,6 +126,7 @@
+         <Resource name="keepalive" />,
+         <Resource name="insights" />,
+         <Player />,
++        <SpotiboysEventBridge />,
+       ]}
+     </RAAdmin>
+   )

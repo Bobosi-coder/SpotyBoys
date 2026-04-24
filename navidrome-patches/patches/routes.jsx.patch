@@ -1,0 +1,14 @@
+--- a/ui/src/routes.jsx	2026-04-24 13:10:17
++++ b/ui/src/routes.jsx	2026-04-24 13:10:17
+@@ -1,9 +1,11 @@
+ import React from 'react'
+ import { Route } from 'react-router-dom'
+ import Personal from './personal/Personal'
++import RecommendationsPage from './recommendations/RecommendationsPage'
+ 
+ const routes = [
+   <Route exact path="/personal" render={() => <Personal />} key={'personal'} />,
++  <Route exact path="/recommendations" render={() => <RecommendationsPage />} key={'recommendations'} />,
+ ]
+ 
+ export default routes

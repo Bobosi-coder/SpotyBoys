@@ -28,7 +28,9 @@ services:
       retries: 12
 
   navidrome:
-    image: deluan/navidrome:latest
+    build:
+      context: ./navidrome-patches
+      dockerfile: Dockerfile
     environment:
       ND_SCANSCHEDULE: "1m"
       ND_LOGLEVEL: info
@@ -268,14 +270,6 @@ services:
     depends_on:
       - recommendation-api
 
-  frontend-web:
-    build:
-      context: .
-      dockerfile: apps/frontend-web/Dockerfile
-    depends_on:
-      - recommendation-api
-      - event-api
-
   grafana:
     image: grafana/grafana:10.4.2
     ports:
@@ -301,4 +295,4 @@ services:
     depends_on:
       - recommendation-api
       - event-api
-      - frontend-web
+      - navidrome
