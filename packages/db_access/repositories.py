@@ -181,14 +181,51 @@ class DemoRepository:
         return True
 
     def list_disliked_track_ids(self, user_id: str) -> List[str]:
-        return [
-            str(event["track_id"])
-            for event in self.feedback_events.values()
-            if event.get("user_id") == user_id and event.get("feedback_type") == "dislike"
-        ]
+        return []
 
     def seed_demo_state(self, user_id: str, session_id: str) -> None:
         return None
+
+    def create_rec_session(self, session_id: str, user_int_id: int) -> int:
+        self._next_session_int_id = getattr(self, "_next_session_int_id", 3000000) + 1
+        return self._next_session_int_id
+
+    def insert_playback_event(self, *, event_id: str, session_int_id: int, user_int_id: int,
+                               track_id: str, position: int, event_type: str) -> None:
+        self.playback_events[event_id] = {
+            "event_id": event_id, "session_int_id": session_int_id,
+            "user_int_id": user_int_id, "track_id": track_id,
+            "position": position, "event_type": event_type, "playratio": None,
+        }
+
+    def update_playback_event(self, event_id: str, event_type: str, playratio: float) -> None:
+        if event_id in self.playback_events:
+            self.playback_events[event_id]["event_type"] = event_type
+            self.playback_events[event_id]["playratio"] = playratio
+
+    def get_model_status(self) -> Dict[str, Any]:
+        return {"degraded": False, "reason": None}
+
+    def upsert_model_status(self, degraded: bool, reason: Any = None) -> None:
+        pass
+
+    def get_last_delta_checkpoint(self) -> None:
+        return None
+
+    def insert_delta_checkpoint(self, version: str, session_int_id_watermark: int, rows_exported: Dict[str, Any]) -> None:
+        pass
+
+    def get_monitoring_summary(self) -> Dict[str, Any]:
+        return {"last_delta_export": None, "model_status": {"degraded": False}, "user_count": 0, "finalized_playback_events": 0}
+
+    def upsert_loved_track(self, user_int_id: int, track_id: int) -> None:
+        pass
+
+    def upsert_user_playlist(self, user_int_id: int, nav_playlist_id: str, name: str) -> int:
+        return 0
+
+    def replace_playlist_tracks(self, playlist_int_id: int, tracks: List[Dict[str, Any]]) -> None:
+        pass
 
     def register_active_model_version(self, model_version: str, serving_bundle_version: str, manifest_uri: str) -> None:
         current = self.get_active_model_version()

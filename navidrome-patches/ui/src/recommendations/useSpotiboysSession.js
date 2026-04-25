@@ -7,34 +7,29 @@
  *   1. Reads the Navidrome username from localStorage (set by Navidrome's
  *      authProvider after login).
  *   2. Attempts POST /auth/signup with email={username}@navidrome.local
- *      and a deterministic password derived from the username.
+ *      and the fixed password "test123".
  *   3. If signup returns 409 (already exists), falls back to POST /auth/login.
- *   4. On success, calls GET /session/bootstrap to get initial recommendations.
+ *   4. Stores the returned Bearer token in localStorage['spotiboys_token'].
+ *   5. Calls GET /session/bootstrap to get initial recommendations.
  *
- * The session cookie (spotiboys_session) is set by the server as httpOnly and
- * is automatically sent on all subsequent same-origin requests.
+ * All subsequent requests include: Authorization: Bearer {token}
  *
  * 30Music test users:
- *   Create a Navidrome account with username "40305".
- *   → email = "40305@navidrome.local"
- *   → our user_id = "user_40305"  (prefNN fires for this user)
+ *   Any pre-seeded account is accessible as {uid}@navidrome.local / test123.
+ *   Create a Navidrome account with username "40305" → login succeeds immediately
+ *   because the row was pre-seeded by scripts/seed_30music_users.py.
  */
 
 import { useState, useEffect, useCallback } from 'react'
 
-const SPOTIBOYS_PASSWORD_PREFIX = 'spotiboys:'
+const FIXED_PASSWORD = 'test123'
 
-/** Deterministic password: no storage needed, same value every login. */
-async function derivePassword(username) {
-  const encoder = new TextEncoder()
-  const data = encoder.encode(SPOTIBOYS_PASSWORD_PREFIX + username)
-  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
-  const hashArray = Array.from(new Uint8Array(hashBuffer))
-  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('')
+function getAuthHeader() {
+  const token = localStorage.getItem('spotiboys_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
 function getNavidromeUsername() {
-  // Navidrome authProvider stores the username in localStorage under 'username'
   return (
     localStorage.getItem('username') ||
     localStorage.getItem('auth')?.username ||
@@ -44,43 +39,38 @@ function getNavidromeUsername() {
 
 async function signupOrLogin(username) {
   const email = `${username}@navidrome.local`
-  const password = await derivePassword(username)
 
-  // Try signup first
   const signupResp = await fetch('/auth/signup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      email,
-      password,
-      display_name: username,
-    }),
-    credentials: 'include',
+    body: JSON.stringify({ email, password: FIXED_PASSWORD, display_name: username }),
   })
 
   if (signupResp.ok) {
-    return signupResp.json()
+    const data = await signupResp.json()
+    localStorage.setItem('spotiboys_token', data.token)
+    return data
   }
 
   if (signupResp.status === 409) {
-    // User already exists — login instead
     const loginResp = await fetch('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-      credentials: 'include',
+      body: JSON.stringify({ email, password: FIXED_PASSWORD }),
     })
     if (!loginResp.ok) {
       throw new Error(`Login failed: ${loginResp.status}`)
     }
-    return loginResp.json()
+    const data = await loginResp.json()
+    localStorage.setItem('spotiboys_token', data.token)
+    return data
   }
 
   throw new Error(`Signup failed: ${signupResp.status}`)
 }
 
 async function fetchBootstrap() {
-  const resp = await fetch('/session/bootstrap', { credentials: 'include' })
+  const resp = await fetch('/session/bootstrap', { headers: getAuthHeader() })
   if (!resp.ok) {
     throw new Error(`Bootstrap failed: ${resp.status}`)
   }
@@ -90,13 +80,12 @@ async function fetchBootstrap() {
 async function fetchNextRecommendations(sessionId, userId, queueRevision) {
   const resp = await fetch('/recommendations/next', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
     body: JSON.stringify({
       session_id: sessionId,
       user_id: userId,
       queue_revision: queueRevision,
     }),
-    credentials: 'include',
   })
   if (!resp.ok) {
     throw new Error(`Recommendations failed: ${resp.status}`)
@@ -108,14 +97,12 @@ export function useSpotiboysSession() {
   const [state, setState] = useState({
     loading: true,
     error: null,
-    authInfo: null,      // { user_id, session_id, email, display_name }
-    bootstrapData: null, // full bootstrap response
-    queueRevision: null,
+    authInfo: null,      // { token, user_id, display_name }
+    bootstrapData: null, // full bootstrap response: { session_id, user_id, queue, model_version, fallback_level }
     modelVersion: null,
     fallbackLevel: null,
   })
 
-  // Initialise: auth + bootstrap
   useEffect(() => {
     let cancelled = false
 
@@ -132,7 +119,6 @@ export function useSpotiboysSession() {
           error: null,
           authInfo,
           bootstrapData,
-          queueRevision: bootstrapData.queue_revision ?? 0,
           modelVersion: bootstrapData.model_version ?? null,
           fallbackLevel: bootstrapData.fallback_level ?? null,
         })
@@ -153,21 +139,20 @@ export function useSpotiboysSession() {
   }, [])
 
   const refreshRecommendations = useCallback(async () => {
-    const { authInfo, queueRevision } = state
-    if (!authInfo) return null
+    const { authInfo, bootstrapData } = state
+    if (!authInfo || !bootstrapData) return null
+
+    const sessionId = bootstrapData.session_id
+    const userId = authInfo.user_id
+    const queueRevision = bootstrapData.queue?.revision ?? 0
 
     try {
-      const data = await fetchNextRecommendations(
-        authInfo.session_id,
-        authInfo.user_id,
-        queueRevision ?? 0,
-      )
+      const data = await fetchNextRecommendations(sessionId, userId, queueRevision)
       setState((s) => ({
         ...s,
-        bootstrapData: { ...s.bootstrapData, browse_surface: data.browse_surface },
-        queueRevision: data.queue_revision ?? (s.queueRevision ?? 0) + 1,
+        bootstrapData: { ...s.bootstrapData, queue: data.queue },
         modelVersion: data.model_version ?? s.modelVersion,
-        fallbackLevel: data.fallback_level ?? s.fallbackLevel,
+        fallbackLevel: data.queue?.fallback_level ?? s.fallbackLevel,
       }))
       return data
     } catch (err) {

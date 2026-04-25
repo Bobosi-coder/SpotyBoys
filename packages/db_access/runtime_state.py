@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Iterable, List, Set
+from typing import Dict, Iterable, List, Optional, Set
 
 from packages.shared_contracts.schemas import QueueItem, QueueState, utc_now
 
@@ -12,6 +12,7 @@ class InMemoryRuntimeState:
         self._queues: Dict[str, QueueState] = {}
         self._dedupe: Set[str] = set()
         self._recent_tracks: Dict[str, List[str]] = {}
+        self._strings: Dict[str, str] = {}
 
     def get_queue(self, session_id: str) -> QueueState:
         return self._queues.get(
@@ -44,6 +45,12 @@ class InMemoryRuntimeState:
     def append_recent_track(self, session_id: str, track_id: str, limit: int = 50) -> None:
         recent = [track_id, *[item for item in self._recent_tracks.get(session_id, []) if item != track_id]]
         self._recent_tracks[session_id] = recent[:limit]
+
+    def get_string(self, key: str) -> Optional[str]:
+        return self._strings.get(key)
+
+    def set_string(self, key: str, value: str, ttl_seconds: Optional[int] = None) -> None:
+        self._strings[key] = value
 
 
 class RedisRuntimeState:
@@ -87,6 +94,15 @@ class RedisRuntimeState:
         pipe.lpush(key, track_id)
         pipe.ltrim(key, 0, limit - 1)
         pipe.execute()
+
+    def get_string(self, key: str) -> Optional[str]:
+        return self.client.get(key)
+
+    def set_string(self, key: str, value: str, ttl_seconds: Optional[int] = None) -> None:
+        if ttl_seconds:
+            self.client.set(key, value, ex=ttl_seconds)
+        else:
+            self.client.set(key, value)
 
     @staticmethod
     def _queue_key(session_id: str) -> str:

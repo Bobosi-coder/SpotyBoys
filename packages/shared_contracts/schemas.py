@@ -81,7 +81,7 @@ class AuthUser(BaseModel):
 
 class SignupRequest(BaseModel):
     email: str
-    password: str = Field(..., min_length=8)
+    password: str = Field(..., min_length=1)
     display_name: str = ""
 
     @validator("email")

@@ -3,112 +3,111 @@
  *
  * Always-mounted component (injected into Navidrome's Layout) that watches
  * the Redux player state and forwards playback lifecycle events to the
- * SpotyBoys event-api.
+ * SpotyBoys recommendation-api.
  *
  * Only emits events for tracks that carry `_spotiboys` metadata — i.e., tracks
  * that were queued by the RecommendationsPage. Regular Navidrome library
  * browsing is silently ignored.
  *
+ * Event model:
+ *   Each physical track play gets a single playback_id (uuid) generated at start.
+ *   The same playback_id is reused for the skip/complete update so the server
+ *   can INSERT on playback_start and UPDATE on skip/complete.
+ *
  * Events emitted:
- *   playback_start  — when a new _spotiboys track starts playing
- *   skip            — when the player advances to the next track while the
- *                     current _spotiboys track had not yet completed
- *   complete        — when a _spotiboys track's audio ends naturally
+ *   playback_start  — INSERT: new row, playratio=null
+ *   skip            — UPDATE: set event_type + playratio (elapsed / duration)
+ *   complete        — UPDATE: set event_type + playratio=0.95
  */
 
 import { useEffect, useRef } from 'react'
 import { useSelector } from 'react-redux'
+import { v4 as uuidv4 } from 'uuid'
 
-let clientEventSeq = 0
+function getAuthHeader() {
+  const token = localStorage.getItem('spotiboys_token')
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
 
 async function postEvent(payload) {
   try {
     await fetch('/events/playback', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
       body: JSON.stringify(payload),
-      credentials: 'include',
     })
   } catch {
     // Non-fatal — playback continues even if event logging fails
   }
 }
 
-function buildEvent(eventType, current, positionMs) {
-  const sb = current.song?._spotiboys
-  if (!sb) return null
-
-  clientEventSeq += 1
-  return {
-    event_id: `evt_${sb.track_id}_${Date.now()}_${clientEventSeq}`,
-    event_type: eventType,
-    session_id: sb.session_id,
-    user_id: sb.user_id,
-    track_id: sb.track_id,
-    request_id: sb.request_id || null,
-    impression_id: sb.impression_id || null,
-    position_ms: positionMs,
-    playback_ms: positionMs,
-    occurred_at: new Date().toISOString(),
-    client_event_seq: clientEventSeq,
-  }
-}
-
 export default function SpotiboysEventBridge() {
   const current = useSelector((state) => state.player?.current || {})
   const prevUuidRef = useRef(null)
-  const prevTrackIdRef = useRef(null)
+  const playbackIdRef = useRef(null)       // uuid reused across start/skip/complete
+  const prevSpotiboysRef = useRef(null)    // _spotiboys metadata of current track
   const startTimeRef = useRef(null)
   const completedRef = useRef(false)
 
   useEffect(() => {
     const uuid = current.uuid
     const ended = current.ended
-    const song = current.song
-    const spotiboys = song?._spotiboys
-    const trackId = spotiboys?.track_id || null
+    const spotiboys = current.song?._spotiboys
 
-    // ── Track changed ────────────────────────────────────────────────────────
+    // ── Track changed ──────────────────────────────────────────────────────────
     if (uuid && uuid !== prevUuidRef.current) {
-      // If the previous track had _spotiboys and wasn't completed naturally,
-      // emit a skip event for it.
-      if (
-        prevTrackIdRef.current &&
-        !completedRef.current &&
-        prevUuidRef.current !== null
-      ) {
-        const skipEvent = buildEvent('skip', { song: { _spotiboys: { track_id: prevTrackIdRef.current, session_id: spotiboys?.session_id, user_id: spotiboys?.user_id, request_id: spotiboys?.request_id, impression_id: spotiboys?.impression_id } } }, 0)
-        // Use previous track's stored _spotiboys if available
-        // (they're already gone from current at this point — best-effort)
-        if (skipEvent) postEvent(skipEvent)
+      // Emit skip for the previous track if it didn't complete naturally
+      if (prevSpotiboysRef.current && !completedRef.current && prevUuidRef.current !== null) {
+        const elapsed = startTimeRef.current ? (Date.now() - startTimeRef.current) : 0
+        const durationMs = (prevSpotiboysRef.current.duration_sec || 30) * 1000
+        const playratio = Math.min(0.99, Math.max(0, elapsed / durationMs))
+        postEvent({
+          playback_id: playbackIdRef.current,
+          event_type: 'skip',
+          track_id: prevSpotiboysRef.current.track_id,
+          session_id: prevSpotiboysRef.current.session_id,
+          position: prevSpotiboysRef.current.position || 0,
+          playratio: Math.round(playratio * 100) / 100,
+          position_ms: elapsed,
+        })
       }
 
       prevUuidRef.current = uuid
-      prevTrackIdRef.current = trackId
-      startTimeRef.current = Date.now()
       completedRef.current = false
+      startTimeRef.current = Date.now()
 
-      // playback_start
       if (spotiboys && !ended) {
-        const evt = buildEvent('playback_start', current, 0)
-        if (evt) postEvent(evt)
+        const newPlaybackId = uuidv4()
+        playbackIdRef.current = newPlaybackId
+        prevSpotiboysRef.current = spotiboys
+        postEvent({
+          playback_id: newPlaybackId,
+          event_type: 'playback_start',
+          track_id: spotiboys.track_id,
+          session_id: spotiboys.session_id,
+          position: spotiboys.position || 0,
+          playratio: null,
+        })
+      } else {
+        playbackIdRef.current = null
+        prevSpotiboysRef.current = null
       }
       return
     }
 
     // ── Track ended naturally ────────────────────────────────────────────────
-    if (ended && uuid === prevUuidRef.current && !completedRef.current) {
-      if (spotiboys) {
-        const posMs = startTimeRef.current
-          ? Math.round(Date.now() - startTimeRef.current)
-          : 0
-        const evt = buildEvent('complete', current, posMs)
-        if (evt) postEvent(evt)
-      }
+    if (ended && uuid === prevUuidRef.current && !completedRef.current && spotiboys && playbackIdRef.current) {
       completedRef.current = true
+      postEvent({
+        playback_id: playbackIdRef.current,
+        event_type: 'complete',
+        track_id: spotiboys.track_id,
+        session_id: spotiboys.session_id,
+        position: spotiboys.position || 0,
+        playratio: 0.95,
+      })
     }
   }, [current])
 
-  // This component renders nothing — it's a pure side-effect hook.
   return null
 }

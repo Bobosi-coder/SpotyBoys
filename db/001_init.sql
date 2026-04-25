@@ -1,297 +1,113 @@
 -- =====================================================
--- 001_init.sql
--- Spotiboys Recommender System - Initial Implementation
--- Current design based on 30Music + Item2Vec pipeline
+-- 001_init.sql — SpotyBoys service schema
+-- Single `app` schema, 9 tables
 -- =====================================================
-
--- Optional: stop on first error when run in psql with:
--- psql -v ON_ERROR_STOP=1 -f db/001_init.sql
 
 BEGIN;
 
--- =====================================================
--- Schemas
--- =====================================================
+CREATE SCHEMA IF NOT EXISTS app;
 
-CREATE SCHEMA IF NOT EXISTS raw;
-CREATE SCHEMA IF NOT EXISTS processed;
-CREATE SCHEMA IF NOT EXISTS ml;
-CREATE SCHEMA IF NOT EXISTS serving;
-
--- =====================================================
--- RAW SCHEMA
--- =====================================================
-
-CREATE TABLE IF NOT EXISTS raw.tracks (
-    id BIGINT PRIMARY KEY,
-    mbid VARCHAR,
-    name TEXT,
-    title TEXT,
-    artist_hint TEXT,
-    duration_ms INTEGER,
-    playcount INTEGER,
-    created_at TIMESTAMP
+-- All users: 30Music pre-seeded (user_int_id 1–45175) + online signups (>=100000)
+CREATE TABLE IF NOT EXISTS app.users (
+    user_id       TEXT PRIMARY KEY,        -- "user_40305" or "user_{uuid}"
+    user_int_id   BIGINT NOT NULL UNIQUE,  -- 30Music ID, or nextval from 100000
+    email         TEXT NOT NULL UNIQUE,    -- "{uid}@navidrome.local" or user-provided
+    password_hash TEXT NOT NULL,           -- PBKDF2-SHA256
+    display_name  TEXT,
+    created_at    TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS raw.artists (
-    id BIGINT PRIMARY KEY,
-    mbid VARCHAR,
-    name VARCHAR NOT NULL,
-    created_at TIMESTAMP
+CREATE SEQUENCE IF NOT EXISTS app.online_user_int_id_seq START 100000;
+
+-- Auth tokens — Bearer token in Authorization header (no cookies)
+CREATE TABLE IF NOT EXISTS app.auth_sessions (
+    token_hash  TEXT PRIMARY KEY,          -- SHA-256(raw_token), never store raw
+    user_id     TEXT NOT NULL REFERENCES app.users(user_id),
+    expires_at  TIMESTAMPTZ NOT NULL,      -- 14 days from login
+    revoked_at  TIMESTAMPTZ               -- set on logout
 );
 
-CREATE TABLE IF NOT EXISTS raw.albums (
-    id BIGINT PRIMARY KEY,
-    mbid VARCHAR,
-    title VARCHAR NOT NULL,
-    created_at TIMESTAMP
+-- Recommendation sessions (one per page load / bootstrap call)
+CREATE TABLE IF NOT EXISTS app.rec_sessions (
+    session_id      TEXT PRIMARY KEY,      -- "sess_{uuid}"
+    user_int_id     BIGINT NOT NULL,
+    session_int_id  BIGINT NOT NULL UNIQUE, -- nextval from 3000000 (above 30Music max 2,764,469)
+    created_at      TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS raw.tags (
-    id BIGINT PRIMARY KEY,
-    value VARCHAR NOT NULL,
-    url TEXT
+CREATE SEQUENCE IF NOT EXISTS app.session_int_id_seq START 3000000;
+
+-- Playback events (INSERT on playback_start, UPDATE on skip/complete using same event_id)
+CREATE TABLE IF NOT EXISTS app.playback_events (
+    event_id        TEXT PRIMARY KEY,      -- playback_id from frontend (reused across start/skip/complete)
+    session_int_id  BIGINT NOT NULL,
+    user_int_id     BIGINT NOT NULL,
+    track_id        BIGINT NOT NULL,       -- 30Music track_id from manifest.csv
+    position        INT NOT NULL,          -- position in queue (0-based)
+    playratio       FLOAT,                 -- NULL on playback_start, set on skip/complete
+    event_type      TEXT NOT NULL,         -- "playback_start" | "skip" | "complete"
+    created_at      TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS raw.users (
-    id BIGINT PRIMARY KEY,
-    username VARCHAR,
-    gender VARCHAR,
-    age INTEGER,
-    country VARCHAR,
-    playcount INTEGER,
-    created_at TIMESTAMP
+CREATE INDEX IF NOT EXISTS idx_playback_events_session ON app.playback_events (session_int_id);
+CREATE INDEX IF NOT EXISTS idx_playback_events_playratio ON app.playback_events (session_int_id) WHERE playratio IS NOT NULL;
+
+-- Navidrome stars → 30Music love (synced by delta-export-worker)
+CREATE TABLE IF NOT EXISTS app.loved_tracks (
+    user_int_id  BIGINT NOT NULL,
+    track_id     BIGINT NOT NULL,
+    loved_at     TIMESTAMPTZ DEFAULT now(),
+    PRIMARY KEY  (user_int_id, track_id)
 );
 
-CREATE TABLE IF NOT EXISTS raw.sessions (
-    id BIGINT PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    session_ts BIGINT,
-    num_tracks INTEGER,
-    total_playtime INTEGER,
-    created_at TIMESTAMP,
-    CONSTRAINT fk_raw_sessions_user
-        FOREIGN KEY (user_id) REFERENCES raw.users(id)
+-- Navidrome playlists (synced by delta-export-worker)
+CREATE TABLE IF NOT EXISTS app.user_playlists (
+    playlist_int_id  BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    user_int_id      BIGINT NOT NULL,
+    nav_playlist_id  TEXT NOT NULL UNIQUE,  -- Navidrome's internal playlist ID
+    name             TEXT,
+    synced_at        TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS raw.session_tracks (
-    session_id BIGINT NOT NULL,
-    user_id BIGINT NOT NULL,
-    position INTEGER NOT NULL,
-    track_id BIGINT NOT NULL,
-    playstart BIGINT,
-    playtime INTEGER,
-    playratio REAL,
-    action VARCHAR,
-    label VARCHAR,
-    PRIMARY KEY (session_id, position),
-    CONSTRAINT fk_raw_session_tracks_session
-        FOREIGN KEY (session_id) REFERENCES raw.sessions(id),
-    CONSTRAINT fk_raw_session_tracks_user
-        FOREIGN KEY (user_id) REFERENCES raw.users(id),
-    CONSTRAINT fk_raw_session_tracks_track
-        FOREIGN KEY (track_id) REFERENCES raw.tracks(id)
+CREATE TABLE IF NOT EXISTS app.playlist_tracks (
+    playlist_int_id  BIGINT NOT NULL REFERENCES app.user_playlists(playlist_int_id),
+    position         INT NOT NULL,
+    track_id         BIGINT NOT NULL,
+    PRIMARY KEY (playlist_int_id, position)
 );
 
-CREATE TABLE IF NOT EXISTS raw.events (
-    id BIGINT PRIMARY KEY,
-    track_id BIGINT NOT NULL,
-    user_id BIGINT,
-    event_ts TIMESTAMP,
-    event_type VARCHAR,
-    CONSTRAINT fk_raw_events_track
-        FOREIGN KEY (track_id) REFERENCES raw.tracks(id),
-    CONSTRAINT fk_raw_events_user
-        FOREIGN KEY (user_id) REFERENCES raw.users(id)
+-- Catalog (written by catalog-sync-worker, read by recommendation-api)
+CREATE TABLE IF NOT EXISTS app.playable_tracks (
+    track_id            TEXT PRIMARY KEY,  -- "1977186" (30Music integer as string)
+    title               TEXT NOT NULL,
+    artist              TEXT NOT NULL,
+    album               TEXT DEFAULT '',
+    duration_sec        INT DEFAULT 30,
+    cover_art_url       TEXT,              -- "/covers/{track_id}"
+    is_playable         BOOLEAN DEFAULT TRUE,
+    navidrome_track_id  TEXT UNIQUE,       -- Navidrome's internal ID for stream proxy
+    availability_status TEXT DEFAULT 'available',
+    quarantine_reason   TEXT
 );
 
-CREATE TABLE IF NOT EXISTS raw.track_loves (
-    user_id BIGINT NOT NULL,
-    track_id BIGINT NOT NULL,
-    loved_at TIMESTAMP,
-    PRIMARY KEY (user_id, track_id),
-    CONSTRAINT fk_raw_track_loves_user
-        FOREIGN KEY (user_id) REFERENCES raw.users(id),
-    CONSTRAINT fk_raw_track_loves_track
-        FOREIGN KEY (track_id) REFERENCES raw.tracks(id)
+-- Model health flag (written by delta-export-worker, read by recommendation-api)
+CREATE TABLE IF NOT EXISTS app.model_status (
+    id          INT DEFAULT 1 PRIMARY KEY CHECK (id = 1),  -- single-row table
+    degraded    BOOLEAN NOT NULL DEFAULT false,
+    reason      TEXT,
+    updated_at  TIMESTAMPTZ DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS raw.playlists (
-    id BIGINT PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    created_at TIMESTAMP,
-    CONSTRAINT fk_raw_playlists_user
-        FOREIGN KEY (user_id) REFERENCES raw.users(id)
-);
+INSERT INTO app.model_status (degraded) VALUES (false)
+ON CONFLICT (id) DO NOTHING;
 
-CREATE TABLE IF NOT EXISTS raw.playlist_tracks (
-    playlist_id BIGINT NOT NULL,
-    user_id BIGINT NOT NULL,
-    position INTEGER,
-    track_id BIGINT NOT NULL,
-    PRIMARY KEY (playlist_id, track_id, position),
-    CONSTRAINT fk_raw_playlist_tracks_playlist
-        FOREIGN KEY (playlist_id) REFERENCES raw.playlists(id),
-    CONSTRAINT fk_raw_playlist_tracks_user
-        FOREIGN KEY (user_id) REFERENCES raw.users(id),
-    CONSTRAINT fk_raw_playlist_tracks_track
-        FOREIGN KEY (track_id) REFERENCES raw.tracks(id)
-);
-
-CREATE TABLE IF NOT EXISTS raw.track_artists (
-    track_id BIGINT NOT NULL,
-    artist_id BIGINT NOT NULL,
-    PRIMARY KEY (track_id, artist_id),
-    CONSTRAINT fk_raw_track_artists_track
-        FOREIGN KEY (track_id) REFERENCES raw.tracks(id),
-    CONSTRAINT fk_raw_track_artists_artist
-        FOREIGN KEY (artist_id) REFERENCES raw.artists(id)
-);
-
-CREATE TABLE IF NOT EXISTS raw.track_albums (
-    track_id BIGINT NOT NULL,
-    album_id BIGINT NOT NULL,
-    PRIMARY KEY (track_id, album_id),
-    CONSTRAINT fk_raw_track_albums_track
-        FOREIGN KEY (track_id) REFERENCES raw.tracks(id),
-    CONSTRAINT fk_raw_track_albums_album
-        FOREIGN KEY (album_id) REFERENCES raw.albums(id)
-);
-
-CREATE TABLE IF NOT EXISTS raw.track_tags (
-    track_id BIGINT NOT NULL,
-    tag_id BIGINT NOT NULL,
-    PRIMARY KEY (track_id, tag_id),
-    CONSTRAINT fk_raw_track_tags_track
-        FOREIGN KEY (track_id) REFERENCES raw.tracks(id),
-    CONSTRAINT fk_raw_track_tags_tag
-        FOREIGN KEY (tag_id) REFERENCES raw.tags(id)
-);
-
--- =====================================================
--- PROCESSED SCHEMA
--- =====================================================
-
-CREATE TABLE IF NOT EXISTS processed.dataset_artifacts (
-    id BIGINT PRIMARY KEY,
-    artifact_name VARCHAR NOT NULL,
-    artifact_version VARCHAR NOT NULL,
-    artifact_type VARCHAR NOT NULL,
-    storage_bucket VARCHAR NOT NULL,
-    object_key TEXT NOT NULL,
-    source_description TEXT,
-    created_at TIMESTAMP NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
-    CONSTRAINT uq_processed_dataset_artifacts
-        UNIQUE (artifact_name, artifact_version)
-);
-
-CREATE TABLE IF NOT EXISTS processed.data_splits (
-    id BIGINT PRIMARY KEY,
-    split_version VARCHAR NOT NULL,
-    split_name VARCHAR NOT NULL,
-    storage_bucket VARCHAR NOT NULL,
-    object_key TEXT NOT NULL,
-    session_count BIGINT,
-    created_at TIMESTAMP NOT NULL,
-    CONSTRAINT uq_processed_data_splits
-        UNIQUE (split_version, split_name)
-);
-
--- =====================================================
--- ML SCHEMA
--- =====================================================
-
-CREATE TABLE IF NOT EXISTS ml.track_embeddings (
-    id BIGINT PRIMARY KEY,
-    track_id BIGINT NOT NULL,
-    model_name VARCHAR NOT NULL,
-    model_version VARCHAR NOT NULL,
-    hyperparam_tag VARCHAR,
-    run_id VARCHAR,
-    storage_bucket VARCHAR NOT NULL,
-    object_key TEXT NOT NULL,
-    embedding_dim INTEGER NOT NULL,
-    dtype VARCHAR,
-    row_index INTEGER,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP,
-    CONSTRAINT uq_ml_track_embeddings
-        UNIQUE (track_id, model_name, model_version, hyperparam_tag),
-    CONSTRAINT fk_ml_track_embeddings_track
-        FOREIGN KEY (track_id) REFERENCES raw.tracks(id)
-);
-
-CREATE TABLE IF NOT EXISTS ml.model_artifacts (
-    id BIGINT PRIMARY KEY,
-    artifact_name VARCHAR NOT NULL,
-    artifact_version VARCHAR NOT NULL,
-    artifact_type VARCHAR NOT NULL,
-    model_name VARCHAR,
-    run_id VARCHAR,
-    storage_bucket VARCHAR NOT NULL,
-    object_key TEXT NOT NULL,
-    metadata_json TEXT,
-    created_at TIMESTAMP NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
-    CONSTRAINT uq_ml_model_artifacts
-        UNIQUE (artifact_name, artifact_version)
-);
-
-CREATE TABLE IF NOT EXISTS ml.dataset_versions (
-    id BIGINT PRIMARY KEY,
-    dataset_name VARCHAR NOT NULL,
-    dataset_version VARCHAR NOT NULL,
-    storage_bucket VARCHAR NOT NULL,
-    object_key TEXT NOT NULL,
-    source_description TEXT,
-    created_at TIMESTAMP NOT NULL,
-    is_active BOOLEAN DEFAULT TRUE,
-    CONSTRAINT uq_ml_dataset_versions
-        UNIQUE (dataset_name, dataset_version)
-);
-
--- =====================================================
--- SERVING SCHEMA
--- =====================================================
-
-CREATE TABLE IF NOT EXISTS serving.impression_logs (
-    request_id UUID PRIMARY KEY,
-    user_id BIGINT,
-    session_id BIGINT,
-    requested_at TIMESTAMP NOT NULL,
-    trigger_type VARCHAR NOT NULL,
-    context_track_ids TEXT,
-    candidate_pool_ids TEXT,
-    candidate_scores TEXT,
-    top5_ids TEXT,
-    top5_scores TEXT,
-    exploration_pos TEXT,
-    model_version VARCHAR,
-    fallback_level INTEGER,
-    latency_ms REAL,
-    CONSTRAINT fk_serving_impression_logs_user
-        FOREIGN KEY (user_id) REFERENCES raw.users(id),
-    CONSTRAINT fk_serving_impression_logs_session
-        FOREIGN KEY (session_id) REFERENCES raw.sessions(id)
-);
-
-CREATE TABLE IF NOT EXISTS serving.outcome_logs (
-    outcome_id UUID PRIMARY KEY,
-    request_id UUID NOT NULL,
-    chosen_track_id BIGINT,
-    chosen_from_rec BOOLEAN,
-    chosen_position INTEGER,
-    play_duration_sec REAL,
-    play_ratio REAL,
-    explicit_feedback VARCHAR,
-    derived_label VARCHAR,
-    created_at TIMESTAMP NOT NULL,
-    CONSTRAINT fk_serving_outcome_logs_request
-        FOREIGN KEY (request_id) REFERENCES serving.impression_logs(request_id),
-    CONSTRAINT fk_serving_outcome_logs_track
-        FOREIGN KEY (chosen_track_id) REFERENCES raw.tracks(id)
+-- Delta export watermarks
+CREATE TABLE IF NOT EXISTS app.delta_checkpoint (
+    id                       SERIAL PRIMARY KEY,
+    version                  TEXT NOT NULL,         -- e.g. "20260424_120000"
+    exported_at              TIMESTAMPTZ DEFAULT now(),
+    session_int_id_watermark BIGINT NOT NULL,       -- highest session_int_id exported
+    rows_exported            JSONB                  -- {"sessions": N, "events": M, ...}
 );
 
 COMMIT;

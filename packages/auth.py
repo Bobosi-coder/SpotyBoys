@@ -9,10 +9,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import HTTPException, Request, Response
+from fastapi import HTTPException, Request
 
 
-SESSION_COOKIE_NAME = "spotiboys_session"
 SESSION_TTL_DAYS = 14
 PASSWORD_ITERATIONS = 210_000
 
@@ -70,26 +69,11 @@ def session_expires_at(now: Optional[datetime] = None) -> datetime:
     return current + timedelta(days=SESSION_TTL_DAYS)
 
 
-def set_session_cookie(response: Response, token: str, expires_at: datetime) -> None:
-    max_age = max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
-    response.set_cookie(
-        SESSION_COOKIE_NAME,
-        token,
-        max_age=max_age,
-        expires=expires_at,
-        httponly=True,
-        samesite="lax",
-        secure=False,
-        path="/",
-    )
-
-
-def clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(SESSION_COOKIE_NAME, path="/")
-
-
 def require_authenticated_session(request: Request, repository) -> AuthenticatedSession:
-    token = request.cookies.get(SESSION_COOKIE_NAME)
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="authentication required")
+    token = auth_header.removeprefix("Bearer ").strip()
     if not token:
         raise HTTPException(status_code=401, detail="authentication required")
     session = repository.get_auth_session(hash_session_token(token))

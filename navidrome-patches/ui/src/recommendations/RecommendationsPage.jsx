@@ -4,9 +4,11 @@
  * A Navidrome-integrated recommendations UI powered by the SpotyBoys
  * recommendation-api (C1–C4 GRU pipeline).
  *
- * Shows "Featured" (up to 4 tracks) and "Discover" (up to 10 tracks) sections.
- * Clicking any track adds the full recommendation batch to Navidrome's queue
- * and starts playback immediately using Navidrome's native player.
+ * Shows "Up Next" (top 4 GRU predictions, larger cards) and
+ * "Queue" (remaining 10 tracks, compact list).
+ *
+ * Clicking any track loads all 14 tracks into Navidrome's player queue
+ * and starts playback immediately.
  *
  * Playback events (start / skip / complete) are captured by SpotiboysEventBridge
  * which is always mounted in the app layout.
@@ -18,14 +20,13 @@ import { Card, CardContent, Typography, Grid, IconButton, Chip, CircularProgress
 import PlayArrowIcon from '@material-ui/icons/PlayArrow'
 import RefreshIcon from '@material-ui/icons/Refresh'
 import MusicNoteIcon from '@material-ui/icons/MusicNote'
-import { v4 as uuidv4 } from 'uuid'
 import { PLAYER_PLAY_TRACKS } from '../actions/player'
 import { useSpotiboysSession } from './useSpotiboysSession'
 
 const useStyles = makeStyles((theme) => ({
   root: {
     padding: theme.spacing(3),
-    paddingBottom: 100, // leave room for player dock
+    paddingBottom: 100,
   },
   sectionTitle: {
     marginBottom: theme.spacing(1),
@@ -53,6 +54,20 @@ const useStyles = makeStyles((theme) => ({
     alignItems: 'center',
     justifyContent: 'center',
     overflow: 'hidden',
+    position: 'relative',
+  },
+  coverSmall: {
+    width: 36,
+    height: 36,
+    borderRadius: 3,
+    marginRight: theme.spacing(1.5),
+    flexShrink: 0,
+    background: theme.palette.primary.dark,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    position: 'relative',
   },
   coverImg: {
     width: '100%',
@@ -100,32 +115,41 @@ const useStyles = makeStyles((theme) => ({
     justifyContent: 'center',
     padding: theme.spacing(6),
   },
+  queueRow: {
+    display: 'flex',
+    alignItems: 'center',
+    padding: theme.spacing(0.75, 1),
+    cursor: 'pointer',
+    borderRadius: 4,
+    '&:hover': {
+      background: theme.palette.action.hover,
+    },
+  },
 }))
 
-/** Convert a SpotyBoys track object into the shape Navidrome's player expects. */
-function toNavidromeTrack(track, sessionContext) {
+/** Convert a SpotyBoys QueueItem into the shape Navidrome's player expects. */
+function toNavidromeTrack(track, sessionId) {
   return {
-    // These fields are used by Navidrome's player (mapToAudioLists in playerReducer)
     id: track.track_id,
     title: track.title || track.track_id,
     artist: track.artist || 'Unknown Artist',
     album: track.album || '',
     duration: track.duration_sec || 30,
-    // Override stream URL and cover — patched into playerReducer.js
     musicSrc: `/stream/${track.track_id}`,
     cover: `/covers/${track.track_id}`,
-    // SpotyBoys session context — read by SpotiboysEventBridge for event capture
+    // Metadata read by SpotiboysEventBridge for event capture
     _spotiboys: {
       track_id: track.track_id,
-      session_id: sessionContext.session_id,
-      user_id: sessionContext.user_id,
-      impression_id: sessionContext.impression_id,
-      request_id: sessionContext.request_id,
+      session_id: sessionId,
+      position: (track.queue_position || 1) - 1,  // convert 1-based to 0-based
+      duration_sec: track.duration_sec || 30,
+      impression_id: track.impression_id || null,
+      request_id: track.request_id || null,
     },
   }
 }
 
-function TrackCard({ track, onPlay, classes }) {
+function UpNextCard({ track, onPlay, classes }) {
   return (
     <Card variant="outlined" style={{ marginBottom: 8 }}>
       <div className={classes.trackCard} onClick={() => onPlay(track)}>
@@ -136,7 +160,7 @@ function TrackCard({ track, onPlay, classes }) {
             alt={track.title}
             onError={(e) => { e.target.style.display = 'none' }}
           />
-          <MusicNoteIcon style={{ color: 'white', position: 'absolute' }} />
+          <MusicNoteIcon style={{ color: 'white', position: 'absolute', opacity: 0.4 }} />
         </div>
         <div className={classes.trackInfo}>
           <Typography className={classes.trackTitle} variant="body2">
@@ -151,6 +175,32 @@ function TrackCard({ track, onPlay, classes }) {
         </IconButton>
       </div>
     </Card>
+  )
+}
+
+function QueueRow({ track, onPlay, classes }) {
+  return (
+    <div className={classes.queueRow} onClick={() => onPlay(track)}>
+      <div className={classes.coverSmall}>
+        <img
+          className={classes.coverImg}
+          src={`/covers/${track.track_id}`}
+          alt={track.title}
+          onError={(e) => { e.target.style.display = 'none' }}
+        />
+      </div>
+      <div className={classes.trackInfo}>
+        <Typography className={classes.trackTitle} variant="body2">
+          {track.title || track.track_id}
+        </Typography>
+        <Typography className={classes.trackArtist} variant="caption">
+          {track.artist || 'Unknown Artist'}
+        </Typography>
+      </div>
+      <IconButton size="small" onClick={(e) => { e.stopPropagation(); onPlay(track) }}>
+        <PlayArrowIcon fontSize="small" />
+      </IconButton>
+    </div>
   )
 }
 
@@ -169,25 +219,18 @@ export default function RecommendationsPage() {
 
   const handlePlay = useCallback(
     (startTrack) => {
-      if (!bootstrapData || !authInfo) return
+      if (!bootstrapData) return
 
-      const surface = bootstrapData.browse_surface || {}
+      const sessionId = bootstrapData.session_id
+      const queue = bootstrapData.queue || {}
       const allTracks = [
-        ...(surface.featured_items || []),
-        ...(surface.random_carousel_items || []),
+        ...(queue.up_next || []),
+        ...(queue.remaining || []),
       ]
 
-      const sessionContext = {
-        session_id: authInfo.session_id,
-        user_id: authInfo.user_id,
-        impression_id: bootstrapData.impression_id || null,
-        request_id: bootstrapData.request_id || null,
-      }
-
-      // Build a data map keyed by track_id (Navidrome player expects an object)
       const data = {}
       allTracks.forEach((t) => {
-        data[t.track_id] = toNavidromeTrack(t, sessionContext)
+        data[t.track_id] = toNavidromeTrack(t, sessionId)
       })
 
       dispatch({
@@ -196,7 +239,7 @@ export default function RecommendationsPage() {
         data,
       })
     },
-    [dispatch, bootstrapData, authInfo],
+    [dispatch, bootstrapData],
   )
 
   if (loading) {
@@ -218,13 +261,12 @@ export default function RecommendationsPage() {
     )
   }
 
-  const surface = bootstrapData?.browse_surface || {}
-  const featured = surface.featured_items || []
-  const random = surface.random_carousel_items || []
+  const queue = bootstrapData?.queue || {}
+  const upNext = queue.up_next || []
+  const remaining = queue.remaining || []
 
   return (
     <div className={classes.root}>
-      {/* Header + metadata */}
       <div className={classes.header}>
         <Typography variant="h5">Recommendations</Typography>
         <IconButton onClick={refreshRecommendations} title="Refresh recommendations">
@@ -251,30 +293,28 @@ export default function RecommendationsPage() {
         )}
       </div>
 
-      {/* Featured */}
-      {featured.length > 0 && (
+      {upNext.length > 0 && (
         <>
           <Typography variant="subtitle1" className={classes.sectionTitle}>
-            Featured for you
+            Up Next
           </Typography>
           <Grid container spacing={2}>
-            {featured.map((track) => (
+            {upNext.map((track) => (
               <Grid item xs={12} sm={6} key={track.track_id}>
-                <TrackCard track={track} onPlay={handlePlay} classes={classes} />
+                <UpNextCard track={track} onPlay={handlePlay} classes={classes} />
               </Grid>
             ))}
           </Grid>
         </>
       )}
 
-      {/* Discover */}
-      {random.length > 0 && (
+      {remaining.length > 0 && (
         <>
           <Typography variant="subtitle1" className={classes.sectionTitle}>
-            Discover
+            Queue
           </Typography>
-          {random.map((track) => (
-            <TrackCard
+          {remaining.map((track) => (
+            <QueueRow
               key={track.track_id}
               track={track}
               onPlay={handlePlay}
@@ -284,7 +324,7 @@ export default function RecommendationsPage() {
         </>
       )}
 
-      {featured.length === 0 && random.length === 0 && (
+      {upNext.length === 0 && remaining.length === 0 && (
         <Typography color="textSecondary" style={{ marginTop: 32 }}>
           No recommendations available yet. Play some tracks to personalise your feed.
         </Typography>
