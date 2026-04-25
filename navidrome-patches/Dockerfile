@@ -45,7 +45,7 @@ WORKDIR /navidrome
 COPY --from=ui-builder /navidrome /navidrome
 
 WORKDIR /navidrome
-RUN go build -ldflags="-w -s" -o navidrome .
+RUN go build -tags=netgo -ldflags="-w -s" -o navidrome .
 
 # ── Stage 3: final minimal image ─────────────────────────────────────────────
 FROM alpine:3.20
