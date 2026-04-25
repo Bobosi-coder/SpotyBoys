@@ -1,12 +1,11 @@
---- a/ui/src/reducers/playerReducer.js	2026-04-24 13:11:30
-+++ b/ui/src/reducers/playerReducer.js	2026-04-24 13:11:30
-@@ -76,8 +76,8 @@
-     lyric: lyricText,
+--- a/ui/src/reducers/playerReducer.js
++++ b/ui/src/reducers/playerReducer.js
+@@ -87,8 +87,8 @@
      singer: item.artist,
      duration: item.duration,
--    musicSrc: subsonic.streamUrl(trackId),
+-    musicSrc: makeMusicSrc(trackId),
 -    cover: subsonic.getCoverArtUrl(
-+    musicSrc: item.musicSrc || subsonic.streamUrl(trackId),
++    musicSrc: item.musicSrc || makeMusicSrc(trackId),
 +    cover: item.cover || subsonic.getCoverArtUrl(
        {
          id: trackId,
