@@ -92,6 +92,7 @@ AWS_ENDPOINT_URL=https://chi.tacc.chameleoncloud.org:7480
 S3_ENDPOINT=https://chi.tacc.chameleoncloud.org:7480
 S3_NO_VERIFY_SSL=true
 ARTIFACT_BUCKET=proj23-mlflow-artifacts
+SPOTIBOYS_PUBLIC_BASE_URL=http://<VM_PUBLIC_IP>:8089
 AIRFLOW_BASE_URL=http://host.docker.internal:8080
 AIRFLOW_USERNAME=admin
 AIRFLOW_PASSWORD=admin
