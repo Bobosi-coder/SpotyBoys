@@ -47,7 +47,7 @@ RUN wget -q https://github.com/navidrome/cross-taglib/releases/download/v2.0.2-1
 FROM golang:1.23-bookworm AS go-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ pkgconfig zlib1g-dev && rm -rf /var/lib/apt/lists/*
+    gcc g++ pkg-config zlib1g-dev && rm -rf /var/lib/apt/lists/*
 
 COPY --from=taglib-fetch /taglib /taglib
 
