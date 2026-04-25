@@ -1,6 +1,9 @@
 name: spotyboys_service
 
 x-recommendation-runtime: &recommendation-runtime
+  build:
+    context: .
+    dockerfile: apps/recommendation-api/Dockerfile
   image: ${SPOTIBOYS_RECOMMENDATION_IMAGE:-spotiboys-vm1-recommendation-runtime:latest}
 
 services:
