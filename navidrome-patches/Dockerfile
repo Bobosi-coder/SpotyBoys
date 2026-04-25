@@ -37,7 +37,7 @@ RUN npm ci && npm run build
 # ── Stage 2: build the Go binary ────────────────────────────────────────────
 FROM golang:1.23-alpine AS go-builder
 
-RUN apk add --no-cache gcc g++ musl-dev pkgconfig taglib-dev zlib-dev
+RUN apk add --no-cache gcc musl-dev
 
 WORKDIR /navidrome
 
@@ -45,12 +45,12 @@ WORKDIR /navidrome
 COPY --from=ui-builder /navidrome /navidrome
 
 WORKDIR /navidrome
-RUN go build -tags=netgo -ldflags="-w -s" -o navidrome .
+RUN go build -tags=netgo,notaglib -ldflags="-w -s" -o navidrome .
 
 # ── Stage 3: final minimal image ─────────────────────────────────────────────
 FROM alpine:3.21
 
-RUN apk add --no-cache ffmpeg mpv sqlite-libs taglib
+RUN apk add --no-cache ffmpeg mpv sqlite-libs
 
 COPY --from=go-builder /navidrome/navidrome /app/navidrome
 
