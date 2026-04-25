@@ -17,10 +17,6 @@ A full-stack music recommendation system with a GRU session ranker, co-occurrenc
        │                │  │recommendation│               │
        │                │  │   -api :8001 │               │
        │                │  └──────────────┘               │
-       │                │  ┌──────────────┐               │
-       │                │  │  event-api   │               │
-       │                │  │     :8002    │               │
-       │                │  └──────────────┘               │
        │                │  ┌──────┐ ┌─────┐ ┌──────────┐ │
        │                │  │  PG  │ │Redis│ │ Workers  │ │
        │                │  └──────┘ └─────┘ └──────────┘ │
@@ -50,7 +46,8 @@ A full-stack music recommendation system with a GRU session ranker, co-occurrenc
 | Branch | Purpose |
 |--------|---------|
 | `serving_requirements` | Original service stack with separate frontend-web |
-| `feature/navidrome-integration` | **Current** — Navidrome replaces frontend-web; Recommendations page built in |
+| `feature/navidrome-integration` | Navidrome replaces frontend-web; Recommendations page built in |
+| `feature/service-redesign` | **Current** — single API, minimal schema, Bearer auth, delta export loop |
 | `feature/gpu-docker-training` | GPU VM training pipeline (Phase 1 + Phase 2 + promote) |
 
 ---
@@ -70,36 +67,36 @@ A full-stack music recommendation system with a GRU session ranker, co-occurrenc
 ### Step 1 — Prepare storage
 
 ```bash
-sudo mkdir -p /mnt/mlflow_persist/spotiboys/{postgres,navidrome,serving-bundle,object-storage}
+sudo mkdir -p /mnt/mlflow_persist/spotiboys/{postgres,navidrome,serving-bundle}
 sudo chown -R $USER:$USER /mnt/mlflow_persist/spotiboys/
 ```
 
 Music files must be present at `/mnt/mlflow_persist_large/music/*.mp3`.
-If a `manifest.csv` exists there with `track_id,title,artist` columns, it is used for metadata. Otherwise filenames are used as titles.
+A `manifest.csv` with columns `track_id,title,artist` should also be present there for metadata.
 
 ### Step 2 — Clone and checkout
 
 ```bash
 git clone <repo-url> ~/SpotyBoys
 cd ~/SpotyBoys
-git checkout feature/navidrome-integration
+git checkout feature/service-redesign
 ```
 
 ### Step 3 — Configure environment
 
 ```bash
-cp .env.example .env
-chmod 600 .env
-nano .env
-```
-
-```
-AWS_ACCESS_KEY_ID=<your-access-key>
-AWS_SECRET_ACCESS_KEY=<your-secret-key>
+cat > .env << 'EOF'
+AWS_ACCESS_KEY_ID=<your-key>
+AWS_SECRET_ACCESS_KEY=<your-secret>
 AWS_ENDPOINT_URL=https://chi.tacc.chameleoncloud.org:7480
 S3_ENDPOINT=https://chi.tacc.chameleoncloud.org:7480
 S3_NO_VERIFY_SSL=true
 ARTIFACT_BUCKET=proj23-mlflow-artifacts
+AIRFLOW_BASE_URL=http://host.docker.internal:8080
+AIRFLOW_USERNAME=admin
+AIRFLOW_PASSWORD=admin
+EOF
+chmod 600 .env
 ```
 
 ### Step 4 — Start the stack
@@ -108,61 +105,78 @@ ARTIFACT_BUCKET=proj23-mlflow-artifacts
 docker compose up --build -d
 ```
 
-The first startup is slower because:
+**First-boot startup order:**
+1. `postgres` passes healthcheck
+2. In parallel: `navidrome-bootstrap`, `seed-users-worker`, `catalog-sync-worker`, `artifact-fetch-worker`
+3. `recommendation-api` starts (waits for all four above to exit 0)
+4. `delta-export-worker` and `nginx` start
+
+First startup is slower because:
 - `artifact-fetch-worker` downloads ~500 MB of model artifacts from S3
 - `catalog-sync-worker` maps 100K+ tracks from the music library to Navidrome IDs
-- `navidrome` builds from source (Navidrome fork with Recommendations page)
+- `seed-users-worker` imports ~45k pre-seeded 30Music users from S3
+- `navidrome` builds from source (Navidrome fork with Recommendations page patch)
 
 ### Step 5 — Monitor startup
 
 ```bash
+# Overall status
 docker compose ps
-docker compose logs -f artifact-fetch-worker   # one-shot, downloads model
-docker compose logs -f catalog-sync-worker      # one-shot, maps music catalog
+
+# Watch one-shot workers
+docker compose logs -f seed-users-worker     # imports ~45k 30Music users from S3
+docker compose logs -f catalog-sync-worker   # maps music library → Navidrome IDs
+docker compose logs -f artifact-fetch-worker # downloads model artifacts (~500 MB)
+docker compose logs -f recommendation-api    # confirm API is up
 ```
 
-One-shot jobs reach `Exited (0)`:
-- `navidrome-bootstrap`, `artifact-fetch-worker`, `catalog-sync-worker`
+One-shot jobs exit with code 0 when done: `navidrome-bootstrap`, `seed-users-worker`,
+`catalog-sync-worker`, `artifact-fetch-worker`.
 
-Long-running services stay `Up`:
-- `postgres`, `redis`, `navidrome`, `recommendation-api`, `event-api`, `nginx`
-- `serving-monitor-worker`, `rollback-check-worker`, `live-data-monitor-worker`
+Long-running services stay `Up`: `postgres`, `redis`, `navidrome`, `recommendation-api`,
+`delta-export-worker`, `nginx`.
 
-### Step 6 — Open in browser
+### Step 6 — Verify
+
+```bash
+# API health
+curl http://localhost:8089/health
+
+# Check playable track count and model version
+curl http://localhost:8089/ready
+
+# Confirm 30Music users were seeded
+docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys \
+  -c "SELECT COUNT(*) FROM app.users WHERE user_int_id < 100000"
+# expect: ~45000
+
+# Confirm music catalog was mapped
+docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys \
+  -c "SELECT COUNT(*) FROM app.playable_tracks WHERE is_playable = true"
+```
+
+### Step 7 — Open in browser
 
 ```
 http://<VM_PUBLIC_IP>:8089/
 ```
 
-Log in with any Navidrome account. Navigate to **Recommendations** in the left sidebar.
+Create a Navidrome account (any username), log in, then click **Recommendations** in the
+left sidebar.
 
-### Step 7 — Add a test user with personalised recommendations
-
-The preference NN branch uses 30Music user centroids (IDs 1–45175). To test personalisation:
-
-```bash
-# Create Navidrome account with username "40305" via the UI, then:
-docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys << 'SQL'
-INSERT INTO app.users (user_id, email, password_hash, display_name, user_int_id)
-VALUES (
-  'user_40305',
-  '40305@navidrome.local',
-  'pbkdf2_sha256$210000$3q2+796tvu/erb7v3q2+7w==$/nLX3+g4sd48DpwvMtOXxEOMuIgiZDcfJJ0Ez+EXdAE=',
-  '30Music Power User (15126 plays)',
-  40305
-) ON CONFLICT (user_id) DO NOTHING;
-SQL
-```
-
-Log into Navidrome with username `40305`. The Recommendations page will now use the preference NN branch (15,126 historical plays → fully personalised).
-
-See `docs/navidrome_integration.md` for the full auth/ID mapping explanation.
+**Testing personalised recommendations with a 30Music user:**
+Create a Navidrome account with username `40305`. When the Recommendations page loads, the
+hook automatically calls `POST /auth/login` with `40305@navidrome.local` / `test123` — the
+pre-seeded row is already there, and `user_int_id=40305` triggers the prefNN branch
+(15,126 historical plays → fully personalised). All ~45k pre-seeded accounts are accessible
+as `{uid}@navidrome.local` / `test123`.
 
 ---
 
 ## Service VM — MLflow + Airflow
 
-The Service VM also runs MLflow and Airflow in a separate compose stack at `~/docker/`.
+The Service VM also runs MLflow and Airflow in a separate compose stack at `~/docker/`
+(see `service_vm/docker-compose.yaml`).
 
 ```bash
 cd ~/docker
@@ -183,7 +197,8 @@ After startup, configure the `gpu_vm_ssh` connection in Airflow UI (Admin → Co
 | Username | `cc` |
 | Private Key File | `/opt/airflow/ssh/airflow_gpu_key` |
 
-The SSH private key must be at `/home/cc/.ssh/airflow_gpu_key` on the Service VM and its public key must be in `~/.ssh/authorized_keys` on the GPU VM.
+The SSH private key must be at `/home/cc/.ssh/airflow_gpu_key` on the Service VM and its
+public key must be in `~/.ssh/authorized_keys` on the GPU VM.
 
 ---
 
@@ -209,7 +224,7 @@ Edit `docker-compose.yml` — update:
 - AWS_SECRET_ACCESS_KEY=<secret>
 ```
 
-Or move credentials to `.env` (recommended — keeps secrets out of the file).
+Or move credentials to `.env` (recommended).
 
 ```bash
 docker-compose build   # once
@@ -234,10 +249,15 @@ This uploads `Real_service/{VERSION}/` to S3 and saves `Real_service/baseline.js
 
 ### Phase 2 — Retrain after online delta
 
-Triggered automatically by Airflow, or run manually:
+Triggered automatically by Airflow when `delta-export-worker` accumulates ≥1000 new
+complete-play events, or run manually:
+
 ```bash
 docker-compose run training bash scripts/retrain.sh --phase2
 ```
+
+`retrain.sh --phase2` downloads **all** `session_event/delta/` partitions from S3 recursively
+and merges them with the original 30Music snapshot before retraining.
 
 Auto-promotion gate:
 ```
@@ -249,26 +269,92 @@ composite_score ≥ baseline × 0.99  AND  val_loss ≤ baseline_val_loss × 1.0
 ## Retraining Data Flow
 
 ```
-app.playback_events (live service)
+User plays/skips tracks in Navidrome Recommendations page
     │
+    ▼  POST /events/playback (Bearer token)
+app.playback_events  ← INSERT on playback_start, UPDATE on skip/complete
+    │                   (same playback_id UUID reused across all three events)
+    │  label derivation at export time:
+    │    playratio > 0.8  → "positive"
+    │    playratio > 0.2  → "neutral"
+    │    playratio ≤ 0.2  → "skip"
     ▼
-outcome-deriver-worker → app.recommendation_outcomes (derived labels)
+delta-export-worker (every 24h):
+    ├── sync app.loved_tracks   ← Navidrome stars via Subsonic getStarred2
+    ├── sync app.playlist_tracks ← Navidrome playlists via getPlaylists/getPlaylist
+    ├── export 5 parquets to S3: session_event/delta/{VERSION}/
+    │     session_tracks_addition.parquet   (session_id, user_id, position, track_id, playratio, label)
+    │     session_meta_addition.parquet     (session_id, user_id)
+    │     love_addition.parquet             (user_id, track_id)
+    │     users_addition.parquet            (user_id)
+    │     playlist_tracks_addition.parquet  (playlist_id, position, track_id)
+    ├── write app.delta_checkpoint (watermark)
+    ├── if new complete events ≥ 1000 → POST Airflow retrain_phase2 DAG
+    └── if skip_rate > 80% → set app.model_status.degraded = true
+            └── recommendation-api reads this flag (Redis-cached, 5min TTL)
+                  → bypasses GRU ranker, returns popularity-only queue
     │
-    ▼
-parser-export-worker → S3: session_tracks_addition.parquet + 3 others
-    │
-    ▼
-delta-trigger-worker → Airflow REST API → retrain_phase2 DAG
-    │
-    ▼ (GPU VM via SSHOperator)
+    ▼  (Airflow SSHOperator → GPU VM)
 scripts/retrain.sh --phase2
-    ├── rebuild retriever (cooc + pref_nn + popularity)
-    ├── train GRU ranker (best Phase 1 hyperparams from MLflow)
-    └── promote.py --mode auto → Real_service/{VERSION}/ in S3
+    ├── download all delta/ partitions from S3
+    ├── merge_delta.py — merge snapshot + all delta versions
+    ├── rebuild retriever (cooc_session, cooc_playlist, pref_nn, popularity)
+    ├── train GRU ranker
+    └── promote.py --mode auto → Real_service/{NEW_VERSION}/ in S3
     │
-    ▼ (Service VM)
-artifact-fetch-worker → downloads new bundle
-rollback-check-worker → monitors metrics, auto-reverts if degraded
+    ▼  (next Service VM restart or artifact-fetch-worker manual run)
+new serving bundle loaded by recommendation-api
+```
+
+---
+
+## Useful Commands
+
+```bash
+# Service health and status
+docker compose ps
+curl http://localhost:8089/health
+curl http://localhost:8089/ready
+
+# Live logs
+docker compose logs -f recommendation-api
+docker compose logs -f delta-export-worker
+
+# Database inspection
+docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys -c "\dt app.*"
+docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys \
+  -c "SELECT COUNT(*) FROM app.playback_events"
+docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys \
+  -c "SELECT degraded, reason, updated_at FROM app.model_status"
+docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys \
+  -c "SELECT version, session_int_id_watermark, rows_exported FROM app.delta_checkpoint ORDER BY id DESC LIMIT 5"
+
+# Manually run delta export (skip the 24h wait)
+docker compose run --rm delta-export-worker \
+  python workers/delta-export-worker/export_and_trigger.py --once
+
+# Check S3 delta partitions
+aws s3 ls s3://proj23-mlflow-artifacts/session_event/delta/ \
+  --endpoint-url https://chi.tacc.chameleoncloud.org:7480 --no-verify-ssl
+
+# Manually trigger Airflow retraining (requires Bearer token)
+TOKEN=$(curl -s -X POST http://localhost:8089/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"40305@navidrome.local","password":"test123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
+curl -s -X POST http://localhost:8089/admin/trigger-retrain \
+  -H "Authorization: Bearer $TOKEN"
+
+# Re-seed 30Music users (if seed-users-worker failed at first boot)
+docker compose run --rm seed-users-worker python scripts/seed_30music_users.py
+
+# Stopping and restarting
+docker compose down                        # stop (data preserved on bind mounts)
+docker compose up --build -d               # restart with code changes
+
+# Full reset (wipes DB and artifacts — use with caution)
+docker compose down
+rm -rf /mnt/mlflow_persist/spotiboys/
+# Re-run Step 1, then docker compose up --build -d
 ```
 
 ---
@@ -277,57 +363,12 @@ rollback-check-worker → monitors metrics, auto-reverts if degraded
 
 | Tool | URL | What it shows |
 |------|-----|--------------|
-| Grafana | `:3000` | Serving metrics dashboards, data quality, model performance |
+| Grafana | `:3000` | Serving metrics dashboards |
 | MLflow | `<Service VM>:8000` | Training experiment runs, metrics, artifacts |
 | Airflow | `<Service VM>:8080` | DAG run history, Phase 2 retraining jobs |
+| `/monitoring/summary` | `:8089/monitoring/summary` | Live event counts, model status, last export |
 
 Grafana credentials: `admin` / `spotiboys` (anonymous viewer access enabled).
-
----
-
-## Stopping and Restarting
-
-```bash
-# Stop (preserves all data on bind mounts)
-docker compose down
-
-# Restart with code changes
-docker compose up --build -d
-
-# Full reset (wipes DB and artifacts — caution)
-rm -rf /mnt/mlflow_persist/spotiboys/
-# Re-run Step 1, then docker compose up --build -d
-```
-
----
-
-## Useful Commands
-
-```bash
-# Service health
-BASE_URL=http://127.0.0.1:8089 bash infra/scripts/healthcheck_demo.sh
-
-# Live logs
-docker compose logs -f recommendation-api
-docker compose logs -f event-api
-docker compose logs -f serving-monitor-worker
-
-# Database
-docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys -c "\dt app.*"
-docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys \
-  -c "SELECT COUNT(*) FROM app.navidrome_track_mapping;"
-docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys \
-  -c "SELECT COUNT(*) FROM app.playback_events;"
-
-# Check active model version
-docker exec spotyboys_service-recommendation-api-1 \
-  cat /serving-bundle/Real_service/active/manifest.json
-
-# S3 artifact listing (from GPU VM or Service VM)
-aws s3 ls s3://proj23-mlflow-artifacts/ \
-  --endpoint-url https://chi.tacc.chameleoncloud.org:7480 \
-  --no-verify-ssl
-```
 
 ---
 
@@ -335,42 +376,38 @@ aws s3 ls s3://proj23-mlflow-artifacts/ \
 
 ```
 apps/
-  recommendation-api/    C1–C4 pipeline, stream proxy, auth
-  event-api/             playback / feedback ingestion
+  recommendation-api/    auth, session bootstrap, C1–C4 pipeline,
+                         playback event recording, stream proxy, cover art
 navidrome-patches/       Navidrome fork (patches-only)
   Dockerfile             clone + patch + build
   ui/src/
     recommendations/     RecommendationsPage + useSpotiboysSession
-    eventbridge/         SpotiboysEventBridge (event capture)
+    eventbridge/         SpotiboysEventBridge (playback event capture)
   patches/               unified diffs for 4 Navidrome source files
 packages/
   recommendation_engine/ pipeline orchestration (C1–C4)
-  db_access/             PostgreSQL + in-memory repositories
+  db_access/             PostgreSQL + Redis + in-memory repositories
   navidrome_adapter/     internal media access via Subsonic API
   shared_contracts/      API schemas and enums
+  auth.py                Bearer token helpers
   config.py              environment-driven config
 workers/
   catalog-sync-worker/   maps music library → Navidrome IDs → playable catalog
   artifact-fetch-worker/ downloads serving bundle from S3
-  artifact-refresh-worker/ promotes new artifacts to active slot
-  parser-export-worker/  exports playback event delta for retraining
-  outcome-deriver-worker/ derives training labels from playback events
-  delta-trigger-worker/  triggers Airflow retraining DAG
-  serving-monitor-worker/ rolls up serving metrics every 5 minutes
-  rollback-check-worker/ monitors metrics, auto-reverts bad models
-  live-data-monitor-worker/ monitors live data health
+  delta-export-worker/   24h loop: sync loved/playlists, export parquets,
+                         trigger Airflow, update model health flag
+scripts/
+  seed_30music_users.py  one-time: seeds ~45k 30Music users from S3 parquet
+db/
+  001_init.sql           single app schema (9 tables)
 src/
   ranker/                GRU ranker: model, training, inference
   retriever/             C2 multi-recall retrieval + pref NN
-scripts/                 (GPU VM) retrain.sh, tune_phase1.py, promote.py
-db/                      PostgreSQL schema migrations (001–007)
 infra/
   nginx/                 reverse proxy config
   grafana/               Grafana dashboards + provisioning
-  scripts/               healthcheck, Navidrome bootstrap
+  scripts/               Navidrome bootstrap
 service_vm/              Airflow DAG (retrain_phase2) + docker-compose
-docs/
-  navidrome_integration.md   integration workflow, auth mapping, DB schema
 ```
 
 ---
@@ -384,7 +421,24 @@ docs/
 | 8080 | Airflow (Service VM) | Team |
 | 3000 | Grafana | Team |
 | 8001 | recommendation-api | Internal only |
-| 8002 | event-api | Internal only |
 | 4533 | Navidrome | Internal only |
 | 5432 | PostgreSQL | Internal only |
 | 6379 | Redis | Internal only |
+
+---
+
+## Database Schema (app schema)
+
+```
+app.users              all users: pre-seeded 30Music (user_int_id 1–45175) +
+                       online signups (user_int_id ≥ 100000)
+app.auth_sessions      Bearer token store (token_hash, expires_at, revoked_at)
+app.rec_sessions       recommendation sessions (session_int_id starts at 3000000)
+app.playback_events    playback lifecycle: INSERT on start, UPDATE on skip/complete
+app.loved_tracks       synced from Navidrome stars via Subsonic getStarred2
+app.user_playlists     synced from Navidrome playlists
+app.playlist_tracks    synced playlist track entries
+app.playable_tracks    catalog: track metadata + navidrome_track_id for stream proxy
+app.model_status       single-row soft-rollback flag (degraded, reason)
+app.delta_checkpoint   export watermarks (session_int_id, exported_at, rows_exported)
+```
