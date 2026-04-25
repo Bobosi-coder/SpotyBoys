@@ -34,22 +34,19 @@ RUN patch -p1 src/routes.jsx                   < /patches/routes.jsx.patch \
 # 3. Install dependencies and build
 RUN npm ci && npm run build
 
-# ── Stage 2: download pre-built static taglib (official cross-taglib) ───────
-FROM alpine:3.21 AS taglib-fetch
-
-RUN apk add --no-cache wget
-RUN wget -q https://github.com/navidrome/cross-taglib/releases/download/v2.0.2-1/taglib-linux-amd64.tar.gz \
-    && mkdir /taglib \
-    && tar -xzf taglib-linux-amd64.tar.gz -C /taglib
-
-# ── Stage 3: build the Go binary ────────────────────────────────────────────
-# Use Debian (glibc) to match the ABI of the cross-taglib static library
+# ── Stage 2: build the Go binary ────────────────────────────────────────────
+# Use Debian (glibc) to match the cross-taglib static library ABI.
+# curl is used — busybox wget cannot follow GitHub release CDN redirects.
 FROM golang:1.23-bookworm AS go-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc g++ pkg-config zlib1g-dev && rm -rf /var/lib/apt/lists/*
+    gcc g++ pkg-config zlib1g-dev curl && rm -rf /var/lib/apt/lists/*
 
-COPY --from=taglib-fetch /taglib /taglib
+# Download official pre-built static taglib 2.0.2 (navidrome/cross-taglib)
+RUN curl -fSL https://github.com/navidrome/cross-taglib/releases/download/v2.0.2-1/taglib-linux-amd64.tar.gz \
+    -o /tmp/taglib.tar.gz \
+    && mkdir /taglib \
+    && tar -xzf /tmp/taglib.tar.gz -C /taglib
 
 WORKDIR /navidrome
 
@@ -63,7 +60,7 @@ RUN PKG_CONFIG_PATH=/taglib/lib/pkgconfig \
     -ldflags="-extldflags '-static -latomic' -w -s" \
     -o navidrome .
 
-# ── Stage 4: final minimal image ─────────────────────────────────────────────
+# ── Stage 3: final minimal image ─────────────────────────────────────────────
 FROM alpine:3.21
 
 RUN apk add --no-cache ffmpeg mpv
