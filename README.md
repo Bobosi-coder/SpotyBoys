@@ -107,15 +107,15 @@ docker compose up --build -d
 
 **First-boot startup order:**
 1. `postgres` passes healthcheck
-2. In parallel: `navidrome-bootstrap`, `seed-users-worker`, `catalog-sync-worker`, `artifact-fetch-worker`
-3. `recommendation-api` starts (waits for all four above to exit 0)
+2. In parallel: `seed-users-worker`, `catalog-sync-worker`, `artifact-fetch-worker`
+3. `recommendation-api` starts (waits for the one-shot workers above to exit 0)
 4. `delta-export-worker` and `nginx` start
 
 First startup is slower because:
 - `artifact-fetch-worker` downloads ~500 MB of model artifacts from S3
 - `catalog-sync-worker` maps 100K+ tracks from the music library to Navidrome IDs
 - `seed-users-worker` imports ~45k pre-seeded 30Music users from S3
-- `navidrome` builds from source (Navidrome fork with Recommendations page patch)
+- `navidrome` builds the patched image from a recent ExtAuth-capable upstream tag and authenticates users via nginx `Remote-User`
 
 ### Step 5 — Monitor startup
 
@@ -130,8 +130,8 @@ docker compose logs -f artifact-fetch-worker # downloads model artifacts (~500 M
 docker compose logs -f recommendation-api    # confirm API is up
 ```
 
-One-shot jobs exit with code 0 when done: `navidrome-bootstrap`, `seed-users-worker`,
-`catalog-sync-worker`, `artifact-fetch-worker`.
+One-shot jobs exit with code 0 when done: `seed-users-worker`, `catalog-sync-worker`,
+`artifact-fetch-worker`.
 
 Long-running services stay `Up`: `postgres`, `redis`, `navidrome`, `recommendation-api`,
 `delta-export-worker`, `nginx`.
@@ -161,15 +161,14 @@ docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys \
 http://<VM_PUBLIC_IP>:8089/
 ```
 
-Create a Navidrome account (any username), log in, then click **Recommendations** in the
-left sidebar.
+Open `/login`, sign in with a SpotyBoys account, then nginx forwards the authenticated
+`Remote-User` header to Navidrome. Navidrome auto-creates its matching local user via ExtAuth.
 
 **Testing personalised recommendations with a 30Music user:**
-Create a Navidrome account with username `40305`. When the Recommendations page loads, the
-hook automatically calls `POST /auth/login` with `40305@navidrome.local` / `test123` — the
-pre-seeded row is already there, and `user_int_id=40305` triggers the prefNN branch
-(15,126 historical plays → fully personalised). All ~45k pre-seeded accounts are accessible
-as `{uid}@navidrome.local` / `test123`.
+Sign in at `/login` with `40305@navidrome.local` / `test123`. The pre-seeded row is already
+there, and `user_int_id=40305` triggers the prefNN branch (15,126 historical plays → fully
+personalised). All ~45k pre-seeded accounts are accessible as `{uid}@navidrome.local` /
+`test123`.
 
 ---
 
@@ -338,7 +337,7 @@ aws s3 ls s3://proj23-mlflow-artifacts/session_event/delta/ \
   --endpoint-url https://chi.tacc.chameleoncloud.org:7480 --no-verify-ssl
 
 # Manually trigger Airflow retraining (requires Bearer token)
-TOKEN=$(curl -s -X POST http://localhost:8089/auth/login \
+TOKEN=$(curl -s -X POST http://localhost:8089/spotiboys/auth/login \
   -H "Content-Type: application/json" \
   -d '{"email":"40305@navidrome.local","password":"test123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
 curl -s -X POST http://localhost:8089/admin/trigger-retrain \

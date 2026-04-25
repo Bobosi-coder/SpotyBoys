@@ -17,6 +17,10 @@ from packages.db_access.repositories import PlayableTrackRecord
 AUDIO_SUFFIXES = {".mp3", ".flac", ".m4a", ".ogg", ".opus", ".wav", ".aac"}
 
 
+def _navidrome_request(config, url: str) -> urllib.request.Request:
+    return urllib.request.Request(url, headers={"Remote-User": str(config.navidrome_username)})
+
+
 def sync_catalog() -> int:
     config = load_config()
     repository, _runtime = build_repository_and_runtime(config)
@@ -290,7 +294,6 @@ def _fetch_all_navidrome_songs(config) -> dict[str, str]:
     mapping: dict[str, str] = {}
     base_params = {
         "u": config.navidrome_username,
-        "p": config.navidrome_password,
         "v": "1.16.1",
         "c": "spotiboys",
         "f": "json",
@@ -303,7 +306,7 @@ def _fetch_all_navidrome_songs(config) -> dict[str, str]:
         params = {**base_params, "songOffset": offset}
         url = f"{config.navidrome_base_url}/rest/search3.view?{urllib.parse.urlencode(params)}"
         try:
-            with urllib.request.urlopen(url, timeout=30) as response:
+            with urllib.request.urlopen(_navidrome_request(config, url), timeout=30) as response:
                 payload = json.loads(response.read().decode("utf-8"))
         except Exception as exc:
             print(f"warning: Navidrome bulk fetch failed at offset {offset}: {exc}", flush=True)
@@ -358,7 +361,6 @@ def _resolve_navidrome_id(config, row: dict) -> str | None:
 def _search_songs(config, query_text: str) -> list[dict]:
     query = {
         "u": config.navidrome_username,
-        "p": config.navidrome_password,
         "v": "1.16.1",
         "c": "spotiboys",
         "f": "json",
@@ -366,7 +368,7 @@ def _search_songs(config, query_text: str) -> list[dict]:
     }
     url = f"{config.navidrome_base_url}/rest/search3.view?{urllib.parse.urlencode(query)}"
     try:
-        with urllib.request.urlopen(url, timeout=10) as response:
+        with urllib.request.urlopen(_navidrome_request(config, url), timeout=10) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except Exception:
         return []

@@ -10,7 +10,7 @@
 # ── Stage 1: build the patched UI ───────────────────────────────────────────
 FROM node:20-alpine AS ui-builder
 
-ARG NAVIDROME_TAG=v0.54.5
+ARG NAVIDROME_TAG=v0.61.2
 
 RUN apk add --no-cache git patch
 
@@ -37,7 +37,7 @@ RUN npm ci && npm run build
 # ── Stage 2: build the Go binary ────────────────────────────────────────────
 # Use Debian (glibc) to match the cross-taglib static library ABI.
 # curl is used — busybox wget cannot follow GitHub release CDN redirects.
-FROM golang:1.23-bookworm AS go-builder
+FROM golang:1.24-bookworm AS go-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ pkg-config zlib1g-dev curl && rm -rf /var/lib/apt/lists/*

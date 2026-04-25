@@ -41,7 +41,6 @@ log = logging.getLogger("delta-export")
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@postgres:5432/spotiboys")
 NAVIDROME_BASE_URL = os.environ.get("NAVIDROME_BASE_URL", "http://navidrome:4533").rstrip("/")
 NAVIDROME_USERNAME = os.environ.get("NAVIDROME_USERNAME", "spotiboys")
-NAVIDROME_PASSWORD = os.environ.get("NAVIDROME_PASSWORD", "spotiboys")
 AIRFLOW_BASE_URL = os.environ.get("AIRFLOW_BASE_URL", "http://host.docker.internal:8080")
 AIRFLOW_USERNAME = os.environ.get("AIRFLOW_USERNAME", "admin")
 AIRFLOW_PASSWORD = os.environ.get("AIRFLOW_PASSWORD", "admin")
@@ -79,14 +78,9 @@ def _upload_parquet(buf: io.BytesIO, s3_key: str) -> None:
 # Navidrome Subsonic helpers
 # ------------------------------------------------------------------ #
 
-def _subsonic_get(path: str, params: Dict[str, Any], username: str = NAVIDROME_USERNAME, password: str = NAVIDROME_PASSWORD) -> Dict[str, Any]:
-    import hashlib, secrets
-    salt = secrets.token_hex(8)
-    token = hashlib.md5((password + salt).encode()).hexdigest()
+def _subsonic_get(path: str, params: Dict[str, Any], username: str = NAVIDROME_USERNAME) -> Dict[str, Any]:
     base_params = {
         "u": username,
-        "t": token,
-        "s": salt,
         "v": "1.16.1",
         "c": "spotiboys-delta",
         "f": "json",
@@ -94,6 +88,7 @@ def _subsonic_get(path: str, params: Dict[str, Any], username: str = NAVIDROME_U
     resp = requests.get(
         f"{NAVIDROME_BASE_URL}/rest/{path}",
         params={**base_params, **params},
+        headers={"Remote-User": str(username)},
         timeout=30,
     )
     resp.raise_for_status()
@@ -277,9 +272,8 @@ def _sync_loved_tracks(conn) -> None:
 
     for user_int_id in active_users:
         try:
-            # Navidrome username = str(user_int_id), password = "test123" (set by _ensure_navidrome_user)
             nav_username = str(user_int_id)
-            resp = _subsonic_get("getStarred2.view", {}, username=nav_username, password="test123")
+            resp = _subsonic_get("getStarred2.view", {}, username=nav_username)
             starred = resp.get("starred2", {})
             songs = starred.get("song", [])
             with conn.cursor() as cur:
@@ -311,7 +305,7 @@ def _sync_playlists(conn) -> None:
     for user_int_id in active_users:
         try:
             nav_username = str(user_int_id)
-            resp = _subsonic_get("getPlaylists.view", {}, username=nav_username, password="test123")
+            resp = _subsonic_get("getPlaylists.view", {}, username=nav_username)
             playlists = resp.get("playlists", {}).get("playlist", [])
             for pl in playlists:
                 nav_pl_id = pl["id"]
@@ -328,7 +322,7 @@ def _sync_playlists(conn) -> None:
                     )
                     playlist_int_id = cur.fetchone()[0]
 
-                    detail = _subsonic_get("getPlaylist.view", {"id": nav_pl_id}, username=nav_username, password="test123")
+                    detail = _subsonic_get("getPlaylist.view", {"id": nav_pl_id}, username=nav_username)
                     entries = detail.get("playlist", {}).get("entry", [])
 
                     cur.execute("DELETE FROM app.playlist_tracks WHERE playlist_int_id = %s", (playlist_int_id,))

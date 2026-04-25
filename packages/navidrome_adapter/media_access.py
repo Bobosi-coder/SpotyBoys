@@ -54,14 +54,13 @@ class MediaAccessService:
             "f": "json",
             "id": navidrome_track_id,
         }
-        if self.config.navidrome_token and self.config.navidrome_salt:
-            query["t"] = self.config.navidrome_token
-            query["s"] = self.config.navidrome_salt
-        else:
-            query["p"] = self.config.navidrome_password
         url = f"{self.config.navidrome_base_url}/rest/stream.view?{urllib.parse.urlencode(query)}"
+        request = urllib.request.Request(
+            url,
+            headers={"Remote-User": str(self.config.navidrome_username)},
+        )
         try:
-            with urllib.request.urlopen(url, timeout=10) as response:
+            with urllib.request.urlopen(request, timeout=10) as response:
                 content_type = response.headers.get_content_type() or "application/octet-stream"
                 payload = response.read()
                 if content_type == "application/json":

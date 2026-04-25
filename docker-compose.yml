@@ -31,6 +31,9 @@ services:
       retries: 12
 
   navidrome:
+    build:
+      context: ./navidrome-patches
+      dockerfile: Dockerfile
     image: ghcr.io/bobosi-coder/spotiboys-navidrome:latest
     environment:
       ND_SCANSCHEDULE: "1m"
@@ -44,17 +47,6 @@ services:
       - /mnt/mlflow_persist_large/music:/music:ro
     expose:
       - "4533"
-
-  navidrome-bootstrap:
-    <<: *recommendation-runtime
-    command: ["python", "infra/scripts/bootstrap_navidrome.py"]
-    environment:
-      NAVIDROME_BASE_URL: http://navidrome:4533
-      NAVIDROME_USERNAME: spotiboys
-      NAVIDROME_PASSWORD: spotiboys
-    depends_on:
-      navidrome:
-        condition: service_started
 
   seed-users-worker:
     <<: *recommendation-runtime
@@ -83,7 +75,6 @@ services:
       SPOTIBOYS_CATALOG_SYNC_LIMIT: ${SPOTIBOYS_CATALOG_SYNC_LIMIT:-0}
       NAVIDROME_BASE_URL: http://navidrome:4533
       NAVIDROME_USERNAME: spotiboys
-      NAVIDROME_PASSWORD: spotiboys
     volumes:
       - /mnt/mlflow_persist_large/music:/music:ro
     depends_on:
@@ -91,8 +82,6 @@ services:
         condition: service_healthy
       navidrome:
         condition: service_started
-      navidrome-bootstrap:
-        condition: service_completed_successfully
 
   artifact-fetch-worker:
     <<: *recommendation-runtime
@@ -123,7 +112,6 @@ services:
       REDIS_URL: redis://redis:6379/0
       NAVIDROME_BASE_URL: http://navidrome:4533
       NAVIDROME_USERNAME: spotiboys
-      NAVIDROME_PASSWORD: spotiboys
       AIRFLOW_BASE_URL: ${AIRFLOW_BASE_URL:-http://host.docker.internal:8080}
       AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
       AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
@@ -158,7 +146,6 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
       NAVIDROME_BASE_URL: http://navidrome:4533
       NAVIDROME_USERNAME: spotiboys
-      NAVIDROME_PASSWORD: spotiboys
       AIRFLOW_BASE_URL: ${AIRFLOW_BASE_URL:-http://host.docker.internal:8080}
       AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
       AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}

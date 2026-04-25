@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -14,43 +13,24 @@ def bootstrap_navidrome() -> None:
     deadline = time.monotonic() + 180
     last_error = ""
     while time.monotonic() < deadline:
-        if _ping(config.navidrome_base_url, config.navidrome_username, config.navidrome_password):
-            print("Navidrome Subsonic user already works")
+        if _ping(config.navidrome_base_url, config.navidrome_username):
+            print("Navidrome ExtAuth Subsonic access works")
             return
-        try:
-            _create_admin(config.navidrome_base_url, config.navidrome_username, config.navidrome_password)
-        except Exception as exc:
-            last_error = str(exc)
-        if _ping(config.navidrome_base_url, config.navidrome_username, config.navidrome_password):
-            print("Navidrome Subsonic user bootstrapped")
-            return
+        last_error = f"ExtAuth ping failed for Remote-User={config.navidrome_username}"
         time.sleep(5)
-    raise RuntimeError(f"Navidrome Subsonic credentials are not usable after bootstrap: {last_error}")
+    raise RuntimeError(f"Navidrome ExtAuth is not usable: {last_error}")
 
 
-def _create_admin(base_url: str, username: str, password: str) -> None:
-    payload = json.dumps({"username": username, "password": password}).encode("utf-8")
-    request = urllib.request.Request(
-        f"{base_url}/auth/createAdmin",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=10) as response:
-            if response.status >= 400:
-                raise RuntimeError(f"Navidrome admin bootstrap failed: HTTP {response.status}")
-    except urllib.error.HTTPError as exc:
-        if exc.code not in {400, 409, 500}:
-            raise
-
-
-def _ping(base_url: str, username: str, password: str) -> bool:
+def _ping(base_url: str, username: str) -> bool:
     query = urllib.parse.urlencode(
-        {"u": username, "p": password, "v": "1.16.1", "c": "spotiboys", "f": "json"}
+        {"u": username, "v": "1.16.1", "c": "spotiboys", "f": "json"}
+    )
+    request = urllib.request.Request(
+        f"{base_url}/rest/ping.view?{query}",
+        headers={"Remote-User": str(username)},
     )
     try:
-        with urllib.request.urlopen(f"{base_url}/rest/ping.view?{query}", timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=5) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except Exception:
         return False
