@@ -37,14 +37,21 @@ RUN npm ci && npm run build
 # ── Stage 2: build the Go binary ────────────────────────────────────────────
 # Use Debian (glibc) to match the cross-taglib static library ABI.
 # curl is used — busybox wget cannot follow GitHub release CDN redirects.
-FROM golang:1.24-bookworm AS go-builder
+FROM golang:1.23-bookworm AS go-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ pkg-config zlib1g-dev curl && rm -rf /var/lib/apt/lists/*
 
 # Download official pre-built static taglib 2.0.2 (navidrome/cross-taglib)
-RUN curl -fSL https://github.com/navidrome/cross-taglib/releases/download/v2.0.2-1/taglib-linux-amd64.tar.gz \
-    -o /tmp/taglib.tar.gz \
+# Detect arch so the same Dockerfile works on amd64 and arm64 hosts.
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+      x86_64)  PLATFORM=linux-amd64 ;; \
+      aarch64) PLATFORM=linux-arm64 ;; \
+      *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fSL https://github.com/navidrome/cross-taglib/releases/download/v2.0.2-1/taglib-${PLATFORM}.tar.gz \
+        -o /tmp/taglib.tar.gz \
     && mkdir /taglib \
     && tar -xzf /tmp/taglib.tar.gz -C /taglib
 
