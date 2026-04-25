@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import json as _json
+import urllib.request as _ureq
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -74,20 +77,149 @@ def ready() -> dict:
 
 
 # ------------------------------------------------------------------ #
-# Auth — Bearer token (no cookies)
+# Auth — Bearer token + httpOnly cookie
 # ------------------------------------------------------------------ #
 
-def _make_auth_response(token: str, user_id: str, display_name: str) -> dict:
-    return {"token": token, "user_id": user_id, "display_name": display_name or ""}
+_LOGIN_HTML = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SpotyBoys</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#1a1a2e;color:#e0e0e0;font-family:Arial,sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh}
+.card{background:#16213e;border-radius:8px;padding:32px;width:340px;box-shadow:0 4px 24px rgba(0,0,0,.6)}
+h1{text-align:center;color:#7986cb;margin-bottom:24px;font-size:26px;letter-spacing:1px}
+.tabs{display:flex;margin-bottom:20px;border-bottom:1px solid #333}
+.tab{flex:1;padding:10px;text-align:center;cursor:pointer;color:#888;background:none;border:none;font-size:14px;transition:color .2s}
+.tab.active{color:#7986cb;border-bottom:2px solid #7986cb}
+.form{display:none}
+.form.active{display:block}
+label{font-size:12px;color:#999;display:block;margin-top:12px;margin-bottom:4px}
+input{width:100%;padding:10px;background:#0f3460;border:1px solid #2a2a5a;border-radius:4px;color:#e0e0e0;font-size:14px}
+input:focus{outline:none;border-color:#7986cb}
+button.submit{width:100%;padding:12px;background:#3f51b5;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:15px;margin-top:20px;transition:background .2s}
+button.submit:hover{background:#5c6bc0}
+.error{color:#ef5350;font-size:12px;margin-top:10px;text-align:center;min-height:16px}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>SpotyBoys</h1>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('login')">Login</button>
+    <button class="tab" onclick="switchTab('register')">Register</button>
+  </div>
+  <div id="form-login" class="form active">
+    <label>Email</label>
+    <input type="email" id="l-email" placeholder="40305@navidrome.local" autocomplete="email">
+    <label>Password</label>
+    <input type="password" id="l-password" autocomplete="current-password" onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="submit" onclick="doLogin()">Sign In</button>
+    <div id="l-err" class="error"></div>
+  </div>
+  <div id="form-register" class="form">
+    <label>Display Name</label>
+    <input type="text" id="r-name" placeholder="Your name">
+    <label>Email</label>
+    <input type="email" id="r-email" autocomplete="email">
+    <label>Password</label>
+    <input type="password" id="r-password" autocomplete="new-password" onkeydown="if(event.key==='Enter')doRegister()">
+    <button class="submit" onclick="doRegister()">Create Account</button>
+    <div id="r-err" class="error"></div>
+  </div>
+</div>
+<script>
+function switchTab(t){
+  document.querySelectorAll('.tab').forEach((el,i)=>el.classList.toggle('active',(i===0)===(t==='login')));
+  document.getElementById('form-login').classList.toggle('active',t==='login');
+  document.getElementById('form-register').classList.toggle('active',t!=='login');
+}
+async function post(url,body){
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),credentials:'include'});
+  const d=await r.json();
+  if(!r.ok)throw new Error(d.detail||'Authentication failed');
+  return d;
+}
+async function doLogin(){
+  document.getElementById('l-err').textContent='';
+  try{
+    const d=await post('/spotiboys/auth/login',{email:document.getElementById('l-email').value,password:document.getElementById('l-password').value});
+    localStorage.setItem('spotiboys_token',d.token);
+    window.location.href='/app/';
+  }catch(e){document.getElementById('l-err').textContent=e.message;}
+}
+async function doRegister(){
+  document.getElementById('r-err').textContent='';
+  try{
+    const d=await post('/spotiboys/auth/signup',{email:document.getElementById('r-email').value,password:document.getElementById('r-password').value,display_name:document.getElementById('r-name').value});
+    localStorage.setItem('spotiboys_token',d.token);
+    window.location.href='/app/';
+  }catch(e){document.getElementById('r-err').textContent=e.message;}
+}
+</script>
+</body>
+</html>"""
 
 
-@app.post("/auth/signup")
-def signup(payload: SignupRequest) -> dict:
+def _make_auth_response(token: str, user_id: str, display_name: str, user_int_id: int) -> dict:
+    return {"token": token, "user_id": user_id, "user_int_id": user_int_id, "display_name": display_name or ""}
+
+
+def _ensure_navidrome_user(user_int_id: int, display_name: str, email: str) -> None:
+    """Lazily create a Navidrome account for a SpotyBoys user. Fire-and-forget."""
+    creds = base64.b64encode(
+        f"{config.navidrome_username}:{config.navidrome_password}".encode()
+    ).decode()
+    body = _json.dumps({
+        "userName": str(user_int_id),
+        "password": "test123",
+        "name": display_name or str(user_int_id),
+        "email": email,
+        "isAdmin": False,
+    }).encode()
+    req = _ureq.Request(
+        f"{config.navidrome_base_url}/api/user",
+        data=body,
+        headers={"Authorization": f"Basic {creds}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with _ureq.urlopen(req, timeout=5):
+            pass
+    except Exception:
+        pass  # non-fatal — user can still use SpotyBoys without a Navidrome account
+
+
+@app.get("/login")
+def login_page() -> Response:
+    return Response(content=_LOGIN_HTML, media_type="text/html")
+
+
+@app.get("/auth/validate")
+def auth_validate(request: Request) -> Response:
+    """Used by nginx auth_request to validate the SpotyBoys session cookie."""
+    token = request.cookies.get("spotiboys_token") or \
+            request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if not token:
+        raise HTTPException(status_code=401)
+    session = repository.get_auth_session(hash_session_token(token))
+    if not session:
+        raise HTTPException(status_code=401)
+    user = repository.get_user_by_id(session.user_id)
+    if not user:
+        raise HTTPException(status_code=401)
+    return Response(status_code=200, headers={"X-User-Int-Id": str(user["user_int_id"])})
+
+
+@app.post("/spotiboys/auth/signup")
+def signup(payload: SignupRequest, response: Response) -> dict:
     existing = repository.get_user_by_email(payload.email)
     if existing:
         raise HTTPException(status_code=409, detail="email already registered")
     user_id = new_user_id()
-    repository.create_user(user_id, payload.email, hash_password(payload.password), payload.display_name)
+    user = repository.create_user(user_id, payload.email, hash_password(payload.password), payload.display_name)
     token = new_session_token()
     expires_at = session_expires_at()
     repository.create_auth_session(
@@ -95,11 +227,13 @@ def signup(payload: SignupRequest) -> dict:
         user_id=user_id,
         expires_at=expires_at,
     )
-    return _make_auth_response(token, user_id, payload.display_name)
+    response.set_cookie("spotiboys_token", token, path="/", httponly=True, samesite="lax")
+    _ensure_navidrome_user(user["user_int_id"], payload.display_name or "", payload.email)
+    return _make_auth_response(token, user_id, payload.display_name, user["user_int_id"])
 
 
-@app.post("/auth/login")
-def login(payload: LoginRequest) -> dict:
+@app.post("/spotiboys/auth/login")
+def login(payload: LoginRequest, response: Response) -> dict:
     user = repository.get_user_by_email(payload.email)
     if not user or not user.get("password_hash") or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="invalid email or password")
@@ -110,20 +244,22 @@ def login(payload: LoginRequest) -> dict:
         user_id=user["user_id"],
         expires_at=expires_at,
     )
-    return _make_auth_response(token, user["user_id"], user.get("display_name", ""))
+    response.set_cookie("spotiboys_token", token, path="/", httponly=True, samesite="lax")
+    _ensure_navidrome_user(user["user_int_id"], user.get("display_name", ""), user.get("email", ""))
+    return _make_auth_response(token, user["user_id"], user.get("display_name", ""), user["user_int_id"])
 
 
-@app.post("/auth/logout", response_model=LogoutResponse)
-def logout(request: Request) -> LogoutResponse:
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        token = auth_header.removeprefix("Bearer ").strip()
-        if token:
-            repository.revoke_auth_session(hash_session_token(token))
+@app.post("/spotiboys/auth/logout", response_model=LogoutResponse)
+def logout(request: Request, response: Response) -> LogoutResponse:
+    token = request.cookies.get("spotiboys_token") or \
+            request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if token:
+        repository.revoke_auth_session(hash_session_token(token))
+    response.delete_cookie("spotiboys_token", path="/")
     return LogoutResponse()
 
 
-@app.get("/auth/me")
+@app.get("/spotiboys/auth/me")
 def auth_me(request: Request) -> dict:
     auth_session = require_authenticated_session(request, repository)
     return {"user_id": auth_session.user_id, "email": auth_session.email, "display_name": auth_session.display_name}

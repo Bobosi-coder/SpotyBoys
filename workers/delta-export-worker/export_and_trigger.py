@@ -79,12 +79,12 @@ def _upload_parquet(buf: io.BytesIO, s3_key: str) -> None:
 # Navidrome Subsonic helpers
 # ------------------------------------------------------------------ #
 
-def _subsonic_get(path: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def _subsonic_get(path: str, params: Dict[str, Any], username: str = NAVIDROME_USERNAME, password: str = NAVIDROME_PASSWORD) -> Dict[str, Any]:
     import hashlib, secrets
     salt = secrets.token_hex(8)
-    token = hashlib.md5((NAVIDROME_PASSWORD + salt).encode()).hexdigest()
+    token = hashlib.md5((password + salt).encode()).hexdigest()
     base_params = {
-        "u": NAVIDROME_USERNAME,
+        "u": username,
         "t": token,
         "s": salt,
         "v": "1.16.1",
@@ -257,25 +257,34 @@ def run_export() -> None:
         conn.close()
 
 
-def _sync_loved_tracks(conn) -> None:
-    """Sync starred tracks from Navidrome → app.loved_tracks."""
-    # Get all users with navidrome.local emails
+def _get_active_users(conn):
+    """Return (user_int_id,) tuples for users who have ever logged in via SpotyBoys."""
     with conn.cursor() as cur:
-        cur.execute("SELECT user_int_id, email FROM app.users")
-        users = cur.fetchall()
+        cur.execute(
+            """
+            SELECT DISTINCT u.user_int_id
+            FROM app.users u
+            JOIN app.auth_sessions s ON s.user_id = u.user_id
+            """
+        )
+        return [row[0] for row in cur.fetchall()]
 
-    for user_int_id, email in users:
-        if not email.endswith("@navidrome.local"):
-            continue
+
+def _sync_loved_tracks(conn) -> None:
+    """Sync starred tracks from Navidrome → app.loved_tracks (active users only)."""
+    active_users = _get_active_users(conn)
+    log.info(f"Syncing loved tracks for {len(active_users)} active users")
+
+    for user_int_id in active_users:
         try:
-            username = email.replace("@navidrome.local", "")
-            resp = _subsonic_get("getStarred2.view", {"u": username})
+            # Navidrome username = str(user_int_id), password = "test123" (set by _ensure_navidrome_user)
+            nav_username = str(user_int_id)
+            resp = _subsonic_get("getStarred2.view", {}, username=nav_username, password="test123")
             starred = resp.get("starred2", {})
             songs = starred.get("song", [])
             with conn.cursor() as cur:
                 for song in songs:
                     nav_id = song.get("id", "")
-                    # Resolve nav_id → track_id
                     cur.execute(
                         "SELECT track_id FROM app.playable_tracks WHERE navidrome_track_id = %s",
                         (nav_id,),
@@ -295,22 +304,18 @@ def _sync_loved_tracks(conn) -> None:
 
 
 def _sync_playlists(conn) -> None:
-    """Sync playlists from Navidrome → app.user_playlists + app.playlist_tracks."""
-    with conn.cursor() as cur:
-        cur.execute("SELECT user_int_id, email FROM app.users")
-        users = cur.fetchall()
+    """Sync playlists from Navidrome → app.user_playlists + app.playlist_tracks (active users only)."""
+    active_users = _get_active_users(conn)
+    log.info(f"Syncing playlists for {len(active_users)} active users")
 
-    for user_int_id, email in users:
-        if not email.endswith("@navidrome.local"):
-            continue
+    for user_int_id in active_users:
         try:
-            username = email.replace("@navidrome.local", "")
-            resp = _subsonic_get("getPlaylists.view", {"u": username})
+            nav_username = str(user_int_id)
+            resp = _subsonic_get("getPlaylists.view", {}, username=nav_username, password="test123")
             playlists = resp.get("playlists", {}).get("playlist", [])
             for pl in playlists:
                 nav_pl_id = pl["id"]
                 pl_name = pl.get("name", "")
-                # Upsert playlist
                 with conn.cursor() as cur:
                     cur.execute(
                         """
@@ -323,11 +328,9 @@ def _sync_playlists(conn) -> None:
                     )
                     playlist_int_id = cur.fetchone()[0]
 
-                    # Get playlist tracks
-                    detail = _subsonic_get("getPlaylist.view", {"id": nav_pl_id})
+                    detail = _subsonic_get("getPlaylist.view", {"id": nav_pl_id}, username=nav_username, password="test123")
                     entries = detail.get("playlist", {}).get("entry", [])
 
-                    # Replace all tracks
                     cur.execute("DELETE FROM app.playlist_tracks WHERE playlist_int_id = %s", (playlist_int_id,))
                     for pos, entry in enumerate(entries):
                         nav_id = entry.get("id", "")
