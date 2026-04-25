@@ -2,7 +2,7 @@
 """
 Seed pre-existing 30Music users into app.users.
 
-Source: s3://proj23-mlflow-artifacts/artifacts/item2vec/users_filtered_i2v.parquet
+Source: s3://proj23-mlflow-artifacts/session_event/snapshot/users_i2v.parquet
   Column: user_id (int64)
 
 All accounts are created with the fixed password "test123" so any account can be
@@ -32,7 +32,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:postgres@po
 AWS_ENDPOINT_URL = os.environ.get("AWS_ENDPOINT_URL", "https://chi.tacc.chameleoncloud.org:7480")
 S3_NO_VERIFY_SSL = os.environ.get("S3_NO_VERIFY_SSL", "true").lower() in ("1", "true", "yes")
 ARTIFACT_BUCKET = os.environ.get("ARTIFACT_BUCKET", "proj23-mlflow-artifacts")
-USERS_PARQUET_KEY = "artifacts/item2vec/users_filtered_i2v.parquet"
+USERS_PARQUET_KEY = "session_event/snapshot/users_i2v.parquet"
 FIXED_PASSWORD = "test123"
 BATCH_SIZE = 1000
 
