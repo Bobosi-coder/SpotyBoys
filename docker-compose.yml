@@ -35,8 +35,9 @@ services:
     environment:
       ND_SCANSCHEDULE: "1m"
       ND_LOGLEVEL: info
-      ND_EXTAUTH_TRUSTEDSOURCES: "172.16.0.0/12"
+      ND_EXTAUTH_TRUSTEDSOURCES: "0.0.0.0/0"
       ND_EXTAUTH_USERHEADER: "Remote-User"
+      ND_ENABLEUSEREDITING: "false"
       ND_EXTAUTH_LOGOUTURL: "/logout"
     volumes:
       - /mnt/mlflow_persist/spotiboys_v2/navidrome:/data

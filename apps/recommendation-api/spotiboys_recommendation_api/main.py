@@ -144,7 +144,7 @@ async function doLogin(){
   try{
     const d=await post('/spotiboys/auth/login',{email:document.getElementById('l-email').value,password:document.getElementById('l-password').value});
     localStorage.setItem('spotiboys_token',d.token);
-    window.location.href='/app/';
+    window.location.href='/';
   }catch(e){document.getElementById('l-err').textContent=e.message;}
 }
 async function doRegister(){
@@ -152,7 +152,7 @@ async function doRegister(){
   try{
     const d=await post('/spotiboys/auth/signup',{email:document.getElementById('r-email').value,password:document.getElementById('r-password').value,display_name:document.getElementById('r-name').value});
     localStorage.setItem('spotiboys_token',d.token);
-    window.location.href='/app/';
+    window.location.href='/';
   }catch(e){document.getElementById('r-err').textContent=e.message;}
 }
 </script>
@@ -180,8 +180,9 @@ def login_page() -> Response:
 @app.get("/logout")
 def logout_page(response: Response) -> Response:
     """Browser logout: clear cookie, clear localStorage via JS, redirect to /login."""
-    response.delete_cookie("spotiboys_token", path="/")
-    return Response(content=_LOGOUT_HTML, media_type="text/html")
+    logout_response = Response(content=_LOGOUT_HTML, media_type="text/html")
+    logout_response.delete_cookie("spotiboys_token", path="/")
+    return logout_response
 
 
 @app.get("/auth/validate")
