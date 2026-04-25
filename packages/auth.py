@@ -70,10 +70,11 @@ def session_expires_at(now: Optional[datetime] = None) -> datetime:
 
 
 def require_authenticated_session(request: Request, repository) -> AuthenticatedSession:
-    auth_header = request.headers.get("authorization", "")
-    if not auth_header.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="authentication required")
-    token = auth_header.removeprefix("Bearer ").strip()
+    # Accept cookie (browser requests) or Bearer header (API clients)
+    token = (
+        request.cookies.get("spotiboys_token")
+        or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    )
     if not token:
         raise HTTPException(status_code=401, detail="authentication required")
     session = repository.get_auth_session(hash_session_token(token))

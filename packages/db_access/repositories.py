@@ -116,11 +116,14 @@ class DemoRepository:
         normalized = email.strip().lower()
         if normalized in self.users_by_email:
             raise ValueError("email already registered")
+        user_int_id = getattr(self, "_next_user_int_id", 100000)
+        self._next_user_int_id = user_int_id + 1
         record = {
             "user_id": user_id,
             "email": normalized,
             "password_hash": password_hash,
             "display_name": display_name or normalized.split("@")[0],
+            "user_int_id": user_int_id,
         }
         self.users[user_id] = record
         self.users_by_email[normalized] = user_id

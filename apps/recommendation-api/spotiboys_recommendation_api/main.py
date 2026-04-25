@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import base64
 import hashlib
-import json as _json
-import urllib.request as _ureq
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -163,38 +160,28 @@ async function doRegister(){
 </html>"""
 
 
+_LOGOUT_HTML = (
+    "<!DOCTYPE html><html><head><meta charset=\"utf-8\"><script>"
+    "localStorage.removeItem('spotiboys_token');"
+    "window.location.href='/login';"
+    "</script></head><body></body></html>"
+)
+
+
 def _make_auth_response(token: str, user_id: str, display_name: str, user_int_id: int) -> dict:
     return {"token": token, "user_id": user_id, "user_int_id": user_int_id, "display_name": display_name or ""}
-
-
-def _ensure_navidrome_user(user_int_id: int, display_name: str, email: str) -> None:
-    """Lazily create a Navidrome account for a SpotyBoys user. Fire-and-forget."""
-    creds = base64.b64encode(
-        f"{config.navidrome_username}:{config.navidrome_password}".encode()
-    ).decode()
-    body = _json.dumps({
-        "userName": str(user_int_id),
-        "password": "test123",
-        "name": display_name or str(user_int_id),
-        "email": email,
-        "isAdmin": False,
-    }).encode()
-    req = _ureq.Request(
-        f"{config.navidrome_base_url}/api/user",
-        data=body,
-        headers={"Authorization": f"Basic {creds}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with _ureq.urlopen(req, timeout=5):
-            pass
-    except Exception:
-        pass  # non-fatal — user can still use SpotyBoys without a Navidrome account
 
 
 @app.get("/login")
 def login_page() -> Response:
     return Response(content=_LOGIN_HTML, media_type="text/html")
+
+
+@app.get("/logout")
+def logout_page(response: Response) -> Response:
+    """Browser logout: clear cookie, clear localStorage via JS, redirect to /login."""
+    response.delete_cookie("spotiboys_token", path="/")
+    return Response(content=_LOGOUT_HTML, media_type="text/html")
 
 
 @app.get("/auth/validate")
@@ -228,7 +215,6 @@ def signup(payload: SignupRequest, response: Response) -> dict:
         expires_at=expires_at,
     )
     response.set_cookie("spotiboys_token", token, path="/", httponly=True, samesite="lax")
-    _ensure_navidrome_user(user["user_int_id"], payload.display_name or "", payload.email)
     return _make_auth_response(token, user_id, payload.display_name, user["user_int_id"])
 
 
@@ -245,7 +231,6 @@ def login(payload: LoginRequest, response: Response) -> dict:
         expires_at=expires_at,
     )
     response.set_cookie("spotiboys_token", token, path="/", httponly=True, samesite="lax")
-    _ensure_navidrome_user(user["user_int_id"], user.get("display_name", ""), user.get("email", ""))
     return _make_auth_response(token, user["user_id"], user.get("display_name", ""), user["user_int_id"])
 
 
