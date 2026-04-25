@@ -46,6 +46,13 @@ def sync_catalog() -> int:
         flush=True,
     )
 
+    # Bulk-fetch all Navidrome songs once (~220 paginated API calls for 110k tracks)
+    # instead of one search3.view call per track (would be 110k calls / ~6 hours).
+    navidrome_map: dict[str, str] = {}
+    if config.media_mode in {"navidrome_fixture", "navidrome_vm_library", "navidrome"}:
+        print("pre-fetching all Navidrome songs in bulk ...", flush=True)
+        navidrome_map = _fetch_all_navidrome_songs(config)
+
     for index, row in enumerate(rows, start=1):
         track_id = str(row["track_id"])
 
@@ -70,7 +77,7 @@ def sync_catalog() -> int:
                     quarantine_reason=row.get("quarantine_reason"),
                 )
             )
-        navidrome_track_id = _resolve_navidrome_id(config, row) or row.get("navidrome_track_id")
+        navidrome_track_id = navidrome_map.get(track_id) or row.get("navidrome_track_id")
         if not navidrome_track_id:
             mapping_failures += 1
             if index == 1 or index % progress_every == 0 or index == total:
@@ -268,6 +275,66 @@ def _first(row: dict, *names: str) -> str | None:
         if value is not None and str(value).strip():
             return str(value).strip()
     return None
+
+
+def _fetch_all_navidrome_songs(config) -> dict[str, str]:
+    """
+    Paginates through every song in Navidrome using search3.view with an empty query.
+    Returns {track_id_stem: navidrome_song_id}.
+
+    For a 110k-track library this is ~220 HTTP calls instead of 110k.
+    Songs are indexed by path stem (e.g. "/music/1977186.mp3" → "1977186").
+    """
+    page_size = 500
+    offset = 0
+    mapping: dict[str, str] = {}
+    base_params = {
+        "u": config.navidrome_username,
+        "p": config.navidrome_password,
+        "v": "1.16.1",
+        "c": "spotiboys",
+        "f": "json",
+        "query": "",
+        "songCount": page_size,
+        "albumCount": 0,
+        "artistCount": 0,
+    }
+    while True:
+        params = {**base_params, "songOffset": offset}
+        url = f"{config.navidrome_base_url}/rest/search3.view?{urllib.parse.urlencode(params)}"
+        try:
+            with urllib.request.urlopen(url, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except Exception as exc:
+            print(f"warning: Navidrome bulk fetch failed at offset {offset}: {exc}", flush=True)
+            break
+        body = payload.get("subsonic-response", {})
+        if body.get("status") != "ok":
+            print(f"warning: Navidrome returned non-ok status at offset {offset}", flush=True)
+            break
+        songs = list(body.get("searchResult3", {}).get("song", []) or [])
+        if not songs:
+            break
+        for song in songs:
+            song_id = song.get("id")
+            if not song_id:
+                continue
+            # Index by file path stem (primary: "/music/1977186.mp3" → "1977186")
+            path = str(song.get("path") or "")
+            stem = Path(path).stem if path else ""
+            if stem:
+                mapping[stem] = str(song_id)
+            # Also index by title when it's a numeric track_id stored as title
+            title = str(song.get("title") or "")
+            if title.isdigit():
+                mapping.setdefault(title, str(song_id))
+        offset += len(songs)
+        if offset % 10000 == 0:
+            print(f"  bulk fetch progress: {offset} songs indexed ...", flush=True)
+        if len(songs) < page_size:
+            break
+    print(f"Navidrome bulk fetch complete: {len(mapping)} songs indexed", flush=True)
+    return mapping
 
 
 def _resolve_navidrome_id(config, row: dict) -> str | None:
