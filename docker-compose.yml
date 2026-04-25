@@ -31,9 +31,6 @@ services:
       retries: 12
 
   navidrome:
-    build:
-      context: ./navidrome-patches
-      dockerfile: Dockerfile
     image: ghcr.io/bobosi-coder/spotiboys-navidrome:latest
     environment:
       ND_SCANSCHEDULE: "1m"
