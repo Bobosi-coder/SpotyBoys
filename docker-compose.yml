@@ -15,7 +15,7 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - ./db:/docker-entrypoint-initdb.d:ro
-      - /mnt/mlflow_persist/spotiboys/postgres:/var/lib/postgresql/data
+      - /mnt/mlflow_persist/spotiboys_v2/postgres:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d spotiboys"]
       interval: 5s
@@ -36,7 +36,7 @@ services:
       ND_SCANSCHEDULE: "1m"
       ND_LOGLEVEL: info
     volumes:
-      - /mnt/mlflow_persist/spotiboys/navidrome:/data
+      - /mnt/mlflow_persist/spotiboys_v2/navidrome:/data
       - /mnt/mlflow_persist_large/music:/music:ro
     expose:
       - "4533"
@@ -102,7 +102,7 @@ services:
       ARTIFACT_BUCKET: ${ARTIFACT_BUCKET:-proj23-mlflow-artifacts}
       SPOTIBOYS_ACTIVE_ARTIFACT_ROOT: /serving-bundle
     volumes:
-      - /mnt/mlflow_persist/spotiboys/serving-bundle:/serving-bundle
+      - /mnt/mlflow_persist/spotiboys_v2/serving-bundle:/serving-bundle
 
   recommendation-api:
     <<: *recommendation-runtime
@@ -132,7 +132,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - /mnt/mlflow_persist_large/music:/music:ro
-      - /mnt/mlflow_persist/spotiboys/serving-bundle:/serving-bundle:ro
+      - /mnt/mlflow_persist/spotiboys_v2/serving-bundle:/serving-bundle:ro
     depends_on:
       postgres:
         condition: service_healthy
