@@ -37,7 +37,7 @@ RUN npm ci && npm run build
 # ── Stage 2: build the Go binary ────────────────────────────────────────────
 # Use Debian (glibc) to match the cross-taglib static library ABI.
 # curl is used — busybox wget cannot follow GitHub release CDN redirects.
-FROM golang:1.24-bookworm AS go-builder
+FROM golang:1.25-bookworm AS go-builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc g++ pkg-config zlib1g-dev curl && rm -rf /var/lib/apt/lists/*
@@ -63,7 +63,7 @@ COPY --from=ui-builder /navidrome /navidrome
 WORKDIR /navidrome
 RUN PKG_CONFIG_PATH=/taglib/lib/pkgconfig \
     CGO_ENABLED=1 \
-    go build -tags=netgo \
+    go build -tags=netgo,sqlite_fts5 \
     -ldflags="-extldflags '-static -latomic' -w -s" \
     -o navidrome .
 
