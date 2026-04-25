@@ -48,7 +48,7 @@ WORKDIR /navidrome
 RUN go build -tags=netgo -ldflags="-w -s" -o navidrome .
 
 # ── Stage 3: final minimal image ─────────────────────────────────────────────
-FROM alpine:3.20
+FROM alpine:3.21
 
 RUN apk add --no-cache ffmpeg mpv sqlite-libs taglib
 
