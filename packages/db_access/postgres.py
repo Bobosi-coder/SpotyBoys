@@ -126,6 +126,11 @@ class PostgresRepository:
                         availability_status = %s,
                         quarantine_reason = %s
                     WHERE track_id = %s
+                      AND NOT EXISTS (
+                        SELECT 1 FROM app.playable_tracks p2
+                        WHERE p2.navidrome_track_id = %s
+                          AND p2.track_id != %s
+                      )
                     """,
                     (
                         navidrome_track_id,
@@ -133,6 +138,8 @@ class PostgresRepository:
                         quarantine_reason,
                         availability_status,
                         quarantine_reason,
+                        str(track_id),
+                        navidrome_track_id,
                         str(track_id),
                     ),
                 )
