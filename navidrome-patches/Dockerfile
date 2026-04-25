@@ -37,7 +37,7 @@ RUN npm ci && npm run build
 # ── Stage 2: build the Go binary ────────────────────────────────────────────
 FROM golang:1.23-alpine AS go-builder
 
-RUN apk add --no-cache gcc musl-dev pkgconfig taglib-dev
+RUN apk add --no-cache gcc g++ musl-dev pkgconfig taglib-dev
 
 WORKDIR /navidrome
 
