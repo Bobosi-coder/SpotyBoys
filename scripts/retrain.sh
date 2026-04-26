@@ -8,14 +8,14 @@
 # Phase 2 (retrain after online delta arrives, fixed hyperparams):
 #   bash scripts/retrain.sh --phase2
 #
-# Environment variables (set in docker-compose.yml):
+# Environment variables (set in .env / docker-compose.yml):
 #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_ENDPOINT_URL
 #   MLFLOW_TRACKING_URI=http://129.114.25.207:8000/
 # =============================================================================
 
 set -euo pipefail
 
-BUCKET="proj23-mlflow-artifacts"
+BUCKET="${ARTIFACT_BUCKET:-proj23-mlflow-artifacts}"
 ENDPOINT="${AWS_ENDPOINT_URL:-https://chi.tacc.chameleoncloud.org:7480}"
 EP="--endpoint-url ${ENDPOINT} --no-verify-ssl --no-progress"
 

@@ -27,11 +27,14 @@ import time
 
 import boto3
 import mlflow
+import requests
 from botocore import UNSIGNED
 from botocore.client import Config
 
-BUCKET   = "proj23-mlflow-artifacts"
+BUCKET   = os.environ.get("ARTIFACT_BUCKET", "proj23-mlflow-artifacts")
 ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "https://chi.tacc.chameleoncloud.org:7480")
+SERVICE_BASE_URL = os.environ.get("SPOTIBOYS_SERVICE_BASE_URL", "").rstrip("/")
+SERVICE_ADMIN_TOKEN = os.environ.get("SPOTIBOYS_SERVICE_ADMIN_TOKEN", "")
 EXPERIMENT_PHASE1 = "training before online service"
 EXPERIMENT_PHASE2 = "retraining after online service"
 
@@ -73,6 +76,24 @@ def s3_copy(s3, src_key: str, dst_key: str) -> None:
 def s3_download_bytes(s3, key: str) -> bytes:
     obj = s3.get_object(Bucket=BUCKET, Key=key)
     return obj["Body"].read()
+
+
+def refresh_service_bundle() -> dict:
+    if not SERVICE_BASE_URL:
+        raise RuntimeError(
+            "SPOTIBOYS_SERVICE_BASE_URL is required for auto promotion to refresh the service VM"
+        )
+    url = f"{SERVICE_BASE_URL}/admin/refresh-serving-bundle"
+    headers = {}
+    if SERVICE_ADMIN_TOKEN:
+        headers["X-SpotyBoys-Admin-Token"] = SERVICE_ADMIN_TOKEN
+    resp = requests.post(
+        url,
+        headers=headers,
+        timeout=300,
+    )
+    resp.raise_for_status()
+    return resp.json()
 
 
 # ── Composite score ────────────────────────────────────────────────────────────
@@ -234,6 +255,14 @@ def main() -> None:
         s3_upload_bytes(s3, json.dumps(baseline, indent=2).encode(),
                         "Real_service/baseline.json")
         log.info("baseline.json saved → Real_service/baseline.json")
+
+    if args.mode == "auto":
+        refresh_result = refresh_service_bundle()
+        log.info(
+            "Service VM refreshed: model_version=%s serving_bundle_version=%s",
+            refresh_result.get("model_version"),
+            refresh_result.get("serving_bundle_version"),
+        )
 
     log.info(f"Promotion complete → s3://{BUCKET}/Real_service/{version}/")
 

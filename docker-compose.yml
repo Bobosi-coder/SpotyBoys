@@ -2,10 +2,13 @@ services:
   training:
     build: .
     environment:
-      - AWS_ACCESS_KEY_ID=11580ec852704238a35acfbd65c7146a
-      - AWS_SECRET_ACCESS_KEY=2759a133cae84a8e9a48c609c4dbc1b1
-      - AWS_ENDPOINT_URL=https://chi.tacc.chameleoncloud.org:7480
-      - MLFLOW_TRACKING_URI=http://129.114.25.207:8000/
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_ENDPOINT_URL=${AWS_ENDPOINT_URL:-https://chi.tacc.chameleoncloud.org:7480}
+      - ARTIFACT_BUCKET=${ARTIFACT_BUCKET:-proj23-mlflow-artifacts}
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI:-http://129.114.25.207:8000/}
+      - SPOTIBOYS_SERVICE_BASE_URL=${SPOTIBOYS_SERVICE_BASE_URL:-}
+      - SPOTIBOYS_SERVICE_ADMIN_TOKEN=${SPOTIBOYS_SERVICE_ADMIN_TOKEN:-}
       - PYTHONWARNINGS=ignore:Unverified HTTPS request
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility

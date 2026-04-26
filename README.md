@@ -42,17 +42,18 @@ cd ~/SpotyBoys
 git checkout feature/gpu-docker-training
 ```
 
-### Step 2 — Set S3 credentials in docker-compose.yml
+### Step 2 — Set environment variables
 
-Edit the `environment:` block in `docker-compose.yml`:
+Create `.env` from `.env.example` and fill in credentials:
 
-```yaml
-environment:
-  - AWS_ACCESS_KEY_ID=<your-access-key>
-  - AWS_SECRET_ACCESS_KEY=<your-secret-key>
-  - AWS_ENDPOINT_URL=https://chi.tacc.chameleoncloud.org:7480
-  - MLFLOW_TRACKING_URI=http://129.114.25.207:8000/
+```bash
+cp .env.example .env
 ```
+
+Set `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `MLFLOW_TRACKING_URI`,
+and `SPOTIBOYS_SERVICE_BASE_URL` for the service VM you are targeting.
+`SPOTIBOYS_SERVICE_ADMIN_TOKEN` is optional; leave it empty for quick demo deployments
+where the service VM admin endpoints are intentionally open.
 
 ### Step 3 — Build the container (once)
 
@@ -121,6 +122,7 @@ docker-compose run training bash scripts/retrain.sh --phase2
 5. Fetches best Phase 1 hyperparams from MLflow (`scripts/get_best_params.py`)
 6. Trains ranker with those hyperparams (experiment: `"retraining after online service"`)
 7. Auto-promotes via `scripts/promote.py --mode auto`
+8. Calls the service VM refresh endpoint so the online API loads the promoted bundle
 
 ### Promotion gate (auto mode)
 
