@@ -136,6 +136,10 @@ function toNavidromeTrack(track, sessionId) {
     artist: track.artist || 'Unknown Artist',
     album: track.album || '',
     duration: track.duration_sec || 30,
+    // Use our API proxy so playback doesn't depend on Navidrome's subsonic
+    // token auth (which is unreliable under ExtAuth / nginx auth_request).
+    musicSrc: `/stream/${track.track_id}`,
+    cover: `/covers/${track.track_id}`,
     // Metadata read by SpotiboysEventBridge for event capture
     _spotiboys: {
       track_id: track.track_id,

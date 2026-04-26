@@ -73,6 +73,18 @@ class PostgresRepository:
                 )
                 return {row[0] for row in cur.fetchall()}
 
+    def get_mapped_track_map(self) -> Dict[str, str]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT track_id, navidrome_track_id
+                    FROM app.playable_tracks
+                    WHERE navidrome_track_id IS NOT NULL
+                    """
+                )
+                return {str(row[0]): str(row[1]) for row in cur.fetchall()}
+
     def upsert_playable_track(self, track: PlayableTrackRecord) -> None:
         with self._connect() as conn:
             with conn.cursor() as cur:

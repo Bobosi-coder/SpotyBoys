@@ -37,9 +37,12 @@ def sync_catalog() -> int:
     duplicate_track_ids = 0
     mapping_failures = 0
 
-    already_mapped: set = set()
-    if hasattr(repository, "get_mapped_track_ids"):
-        already_mapped = repository.get_mapped_track_ids()
+    mapped_track_map: dict[str, str] = {}
+    if hasattr(repository, "get_mapped_track_map"):
+        mapped_track_map = repository.get_mapped_track_map()
+    elif hasattr(repository, "get_mapped_track_ids"):
+        mapped_track_map = {str(track_id): "" for track_id in repository.get_mapped_track_ids()}
+    already_mapped = set(mapped_track_map)
     skipped = len([r for r in rows if str(r["track_id"]) in already_mapped])
     duplicate_track_ids = _count_duplicate_track_ids(rows)
     missing_required = _count_missing_required_rows(rows)
@@ -82,14 +85,26 @@ def sync_catalog() -> int:
                 )
             )
 
-        # Skip tracks already mapped — avoids Navidrome API calls on restarts.
-        if track_id in already_mapped:
+        navidrome_track_id = navidrome_map.get(track_id) or row.get("navidrome_track_id")
+
+        # Skip only when the current Navidrome scan still uses the same song id.
+        # Navidrome can regenerate opaque ids after its DB is rebuilt; in that
+        # case stale Postgres mappings make recommendation playback fail.
+        if (
+            track_id in already_mapped
+            and mapped_track_map.get(track_id)
+            and navidrome_track_id
+            and mapped_track_map.get(track_id) == str(navidrome_track_id)
+        ):
             if index == 1 or index % progress_every == 0 or index == total:
                 _print_progress(index, total, synced, started_at)
             continue
 
-        navidrome_track_id = navidrome_map.get(track_id) or row.get("navidrome_track_id")
         if not navidrome_track_id:
+            if track_id in already_mapped:
+                if index == 1 or index % progress_every == 0 or index == total:
+                    _print_progress(index, total, synced, started_at)
+                continue
             mapping_failures += 1
             if index == 1 or index % progress_every == 0 or index == total:
                 _print_progress(index, total, synced, started_at)

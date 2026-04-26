@@ -304,6 +304,13 @@ class DemoRepository:
     def get_mapped_track_ids(self) -> set:
         return {tid for tid, t in self._tracks.items() if t.navidrome_track_id}
 
+    def get_mapped_track_map(self) -> Dict[str, str]:
+        return {
+            tid: str(track.navidrome_track_id)
+            for tid, track in self._tracks.items()
+            if track.navidrome_track_id
+        }
+
     def upsert_playable_mapping(
         self,
         track_id: str,

@@ -98,6 +98,10 @@ services:
   navidrome-metadata-sync-worker:
     <<: *recommendation-runtime
     command: ["python", "infra/scripts/sync_navidrome_metadata.py"]
+    environment:
+      SPOTIBOYS_NAVIDROME_DB_WAIT_SECONDS: ${SPOTIBOYS_NAVIDROME_DB_WAIT_SECONDS:-300}
+      SPOTIBOYS_NAVIDROME_SCAN_WAIT_SECONDS: ${SPOTIBOYS_NAVIDROME_SCAN_WAIT_SECONDS:-1800}
+      SPOTIBOYS_NAVIDROME_SCAN_READY_RATIO: ${SPOTIBOYS_NAVIDROME_SCAN_READY_RATIO:-0.9}
     volumes:
       - /mnt/mlflow_persist/spotiboys_v2/navidrome:/data
       - /mnt/mlflow_persist_large/music:/music:ro
