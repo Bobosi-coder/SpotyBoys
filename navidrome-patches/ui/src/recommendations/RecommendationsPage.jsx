@@ -132,15 +132,10 @@ function toNavidromeTrack(track, sessionId) {
   const navidromeId = track.navidrome_track_id || track.track_id
   return {
     id: navidromeId,
-    albumId: navidromeId,
-    artistId: navidromeId,
-    coverArt: navidromeId,
     title: track.title || track.track_id,
     artist: track.artist || 'Unknown Artist',
     album: track.album || '',
     duration: track.duration_sec || 30,
-    musicSrc: `/rest/stream.view?id=${encodeURIComponent(navidromeId)}`,
-    cover: track.cover_art_url || `/covers/${track.track_id}`,
     // Metadata read by SpotiboysEventBridge for event capture
     _spotiboys: {
       track_id: track.track_id,
