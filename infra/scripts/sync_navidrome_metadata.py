@@ -113,6 +113,10 @@ def _media_count(conn: sqlite3.Connection) -> tuple[str, int] | None:
     return table, count
 
 
+def _quote_identifier(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _wait_for_scan_rows(
     db_path: Path,
     *,
@@ -153,6 +157,76 @@ def _wait_for_scan_rows(
         time.sleep(max(1, poll_seconds))
 
 
+def _load_temp_metadata(conn: sqlite3.Connection, rows: list[dict[str, str]]) -> None:
+    conn.execute("DROP TABLE IF EXISTS temp.spotiboys_metadata")
+    conn.execute(
+        """
+        CREATE TEMP TABLE spotiboys_metadata (
+            track_id TEXT PRIMARY KEY,
+            filename TEXT NOT NULL,
+            title TEXT NOT NULL,
+            artist TEXT NOT NULL,
+            album TEXT NOT NULL
+        )
+        """
+    )
+    conn.executemany(
+        """
+        INSERT INTO spotiboys_metadata (track_id, filename, title, artist, album)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(track_id) DO UPDATE SET
+            filename = excluded.filename,
+            title = excluded.title,
+            artist = excluded.artist,
+            album = excluded.album
+        """,
+        [
+            (
+                row["track_id"],
+                f"{row['track_id']}.mp3",
+                row["title"],
+                row["artist"],
+                row["album"],
+            )
+            for row in rows
+        ],
+    )
+    conn.execute("CREATE INDEX temp.idx_spotiboys_metadata_filename ON spotiboys_metadata(filename)")
+
+
+def _bulk_update_metadata(conn: sqlite3.Connection, table: str, columns: set[str]) -> int:
+    set_columns = [name for name in ("title", "artist", "album") if name in columns]
+    if not set_columns:
+        return 0
+    quoted_table = _quote_identifier(table)
+
+    total_updated = 0
+    matchers = [
+        ("filename", "m.filename = {table}.path"),
+        ("track_id", "m.track_id = {table}.title"),
+    ]
+    for _name, matcher in matchers:
+        assignments = ", ".join(
+            f"{_quote_identifier(column)} = ("
+            f"SELECT m.{_quote_identifier(column)} FROM spotiboys_metadata m "
+            f"WHERE {matcher.format(table=quoted_table)} LIMIT 1"
+            f")"
+            for column in set_columns
+        )
+        sql = f"""
+            UPDATE {quoted_table}
+            SET {assignments}
+            WHERE EXISTS (
+                SELECT 1
+                FROM spotiboys_metadata m
+                WHERE {matcher.format(table=quoted_table)}
+            )
+        """
+        cur = conn.execute(sql)
+        total_updated += cur.rowcount if cur.rowcount > 0 else 0
+    return total_updated
+
+
 def sync_metadata(
     db_path: Path,
     manifest_path: Path,
@@ -176,21 +250,18 @@ def sync_metadata(
     conn = sqlite3.connect(str(db_path))
     try:
         conn.execute("PRAGMA busy_timeout = 30000")
+        print(
+            f"Navidrome scan ready; loading {len(rows)} manifest metadata rows",
+            flush=True,
+        )
+        _load_temp_metadata(conn, rows)
         updated = 0
         for table in _candidate_tables(conn):
             columns = _table_columns(conn, table)
             if "path" not in columns:
                 continue
-            set_columns = [name for name in ("title", "artist", "album") if name in columns]
-            if not set_columns:
-                continue
-            assignments = ", ".join(f"{name} = ?" for name in set_columns)
-            sql = f"UPDATE {table} SET {assignments} WHERE path = ? OR path LIKE ? OR title = ?"
-            for row in rows:
-                values = [row[name] for name in set_columns]
-                filename = f"{row['track_id']}.mp3"
-                cur = conn.execute(sql, [*values, filename, f"%/{filename}", row["track_id"]])
-                updated += cur.rowcount if cur.rowcount > 0 else 0
+            print(f"updating Navidrome metadata table={table}", flush=True)
+            updated = _bulk_update_metadata(conn, table, columns)
             conn.commit()
             if updated == 0:
                 raise RuntimeError(
