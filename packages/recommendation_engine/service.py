@@ -62,6 +62,7 @@ class RecommendationService:
         request_id = request.request_id or f"req_{uuid.uuid4().hex}"
         impression_id = f"imp_{uuid.uuid4().hex}"
         browse_surface, queue_items = self._compose_surfaces(request_id, impression_id, request.session_id, request.user_id)
+        queue_items = self._rotate_queue_items(queue_items, request.queue_revision)
         queue = self.runtime_state.set_queue(
             request.session_id,
             queue_items,
@@ -89,6 +90,19 @@ class RecommendationService:
             },
         )
         return response
+
+    @staticmethod
+    def _rotate_queue_items(items: List[QueueItem], queue_revision: int | None) -> List[QueueItem]:
+        if not items:
+            return items
+        offset = int(queue_revision or 0) % len(items)
+        if offset == 0:
+            offset = 1 if len(items) > 1 else 0
+        rotated = [*items[offset:], *items[:offset]]
+        return [
+            item.copy(update={"queue_position": index})
+            for index, item in enumerate(rotated, start=1)
+        ]
 
     def _compose_surfaces(
         self,

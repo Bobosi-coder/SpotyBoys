@@ -60,12 +60,6 @@ def sync_catalog() -> int:
     for index, row in enumerate(rows, start=1):
         track_id = str(row["track_id"])
 
-        # Skip tracks already mapped — avoids Navidrome API calls on restarts.
-        if track_id in already_mapped:
-            if index == 1 or index % progress_every == 0 or index == total:
-                _print_progress(index, total, synced, started_at)
-            continue
-
         if hasattr(repository, "upsert_playable_track"):
             repository.upsert_playable_track(
                 PlayableTrackRecord(
@@ -81,6 +75,13 @@ def sync_catalog() -> int:
                     quarantine_reason=row.get("quarantine_reason"),
                 )
             )
+
+        # Skip tracks already mapped — avoids Navidrome API calls on restarts.
+        if track_id in already_mapped:
+            if index == 1 or index % progress_every == 0 or index == total:
+                _print_progress(index, total, synced, started_at)
+            continue
+
         navidrome_track_id = navidrome_map.get(track_id) or row.get("navidrome_track_id")
         if not navidrome_track_id:
             mapping_failures += 1

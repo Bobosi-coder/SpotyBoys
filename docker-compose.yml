@@ -93,6 +93,18 @@ services:
       navidrome-extauth-bootstrap:
         condition: service_completed_successfully
 
+  navidrome-metadata-sync-worker:
+    <<: *recommendation-runtime
+    command: ["python", "infra/scripts/sync_navidrome_metadata.py"]
+    volumes:
+      - /mnt/mlflow_persist/spotiboys_v2/navidrome:/data
+      - /mnt/mlflow_persist_large/music:/music:ro
+    depends_on:
+      navidrome:
+        condition: service_started
+      catalog-sync-worker:
+        condition: service_completed_successfully
+
   artifact-fetch-worker:
     <<: *recommendation-runtime
     command: ["python", "workers/artifact-fetch-worker/fetch_remote_artifacts.py"]
@@ -146,6 +158,8 @@ services:
       seed-users-worker:
         condition: service_completed_successfully
       catalog-sync-worker:
+        condition: service_completed_successfully
+      navidrome-metadata-sync-worker:
         condition: service_completed_successfully
       artifact-fetch-worker:
         condition: service_completed_successfully

@@ -181,8 +181,12 @@ def login_page() -> Response:
 
 
 @app.get("/logout")
-def logout_page(response: Response) -> Response:
-    """Browser logout: clear cookie, clear localStorage via JS, redirect to /login."""
+def logout_page(request: Request) -> Response:
+    """Browser logout: revoke the current session, clear browser state, redirect to /login."""
+    token = request.cookies.get("spotiboys_token") or \
+            request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if token:
+        repository.revoke_auth_session(hash_session_token(token))
     logout_response = Response(content=_LOGOUT_HTML, media_type="text/html")
     logout_response.delete_cookie("spotiboys_token", path="/")
     return logout_response

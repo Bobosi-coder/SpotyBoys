@@ -67,8 +67,9 @@ A full-stack music recommendation system with a GRU session ranker, co-occurrenc
 ### Step 1 — Prepare storage
 
 ```bash
-sudo mkdir -p /mnt/mlflow_persist/spotiboys/{postgres,navidrome,serving-bundle}
-sudo chown -R $USER:$USER /mnt/mlflow_persist/spotiboys/
+sudo mkdir -p /mnt/mlflow_persist/spotiboys_v2/{postgres,navidrome,serving-bundle}
+sudo mkdir -p /mnt/mlflow_persist_large/music
+sudo chown -R $USER:$USER /mnt/mlflow_persist /mnt/mlflow_persist_large
 ```
 
 Music files must be present at `/mnt/mlflow_persist_large/music/*.mp3`.
@@ -80,6 +81,7 @@ A `manifest.csv` with columns `track_id,title,artist` should also be present the
 git clone <repo-url> ~/SpotyBoys
 cd ~/SpotyBoys
 git checkout feature/service-redesign
+git pull
 ```
 
 ### Step 3 — Configure environment
@@ -101,9 +103,45 @@ EOF
 chmod 600 .env
 ```
 
-### Step 4 — Start the stack
+### Step 4 — Start MLflow + Airflow
+
+MLflow and Airflow run from the separate compose file in `service_vm/`.
 
 ```bash
+cd ~/SpotyBoys/service_vm
+
+cat > .env << 'EOF'
+AWS_ACCESS_KEY_ID=<your-key>
+AWS_SECRET_ACCESS_KEY=<your-secret>
+MLFLOW_S3_ENDPOINT_URL=https://chi.tacc.chameleoncloud.org:7480
+BUCKET_NAME=proj23-mlflow-artifacts
+EOF
+
+docker compose up -d postgres mlflow
+docker exec postgres psql -U user -d mlflowdb -c "CREATE DATABASE airflowdb;" || true
+docker compose up -d airflow-init
+docker compose up -d airflow-webserver airflow-scheduler
+```
+
+Configure Airflow SSH access to the GPU VM:
+
+```bash
+docker compose exec airflow-webserver airflow connections add gpu_vm_ssh \
+  --conn-type ssh \
+  --conn-host <GPU_VM_IP> \
+  --conn-login cc \
+  --conn-extra '{"key_file":"/opt/airflow/ssh/airflow_gpu_key","no_host_key_check":true}'
+```
+
+The private key must be available on the Service VM at
+`/home/cc/.ssh/airflow_gpu_key`, because `service_vm/docker-compose.yaml` mounts it
+into the Airflow containers at `/opt/airflow/ssh/airflow_gpu_key`.
+
+### Step 5 — Start the SpotyBoys service stack
+
+```bash
+cd ~/SpotyBoys
+docker compose pull navidrome
 docker compose up --build -d
 ```
 
@@ -120,7 +158,7 @@ First startup is slower because:
 - `seed-users-worker` imports ~45k pre-seeded 30Music users from S3
 - `navidrome` builds the patched image from a recent ExtAuth-capable upstream tag and authenticates users via nginx `Remote-User`
 
-### Step 5 — Monitor startup
+### Step 6 — Monitor startup
 
 ```bash
 # Overall status
@@ -140,14 +178,14 @@ One-shot jobs exit with code 0 when done: `navidrome-extauth-bootstrap`,
 Long-running services stay `Up`: `postgres`, `redis`, `navidrome`, `recommendation-api`,
 `delta-export-worker`, `nginx`.
 
-### Step 6 — Verify
+### Step 7 — Verify
 
 ```bash
 # API health
 curl http://localhost:8089/health
 
 # Check playable track count and model version
-curl http://localhost:8089/ready
+curl http://localhost:8089/recommendation-ready
 
 # Confirm 30Music users were seeded
 docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys \
@@ -159,7 +197,7 @@ docker exec spotyboys_service-postgres-1 psql -U postgres -d spotiboys \
   -c "SELECT COUNT(*) FROM app.playable_tracks WHERE is_playable = true"
 ```
 
-### Step 7 — Open in browser
+### Step 8 — Open in browser
 
 ```
 http://<VM_PUBLIC_IP>:8089/
@@ -178,30 +216,13 @@ personalised). All ~45k pre-seeded accounts are accessible as `{uid}@navidrome.l
 
 ## Service VM — MLflow + Airflow
 
-The Service VM also runs MLflow and Airflow in a separate compose stack at `~/docker/`
-(see `service_vm/docker-compose.yaml`).
-
-```bash
-cd ~/docker
-docker compose up -d
-```
-
 Services:
 - **MLflow** at `:8000` — experiment tracking for training runs
-- **Airflow** at `:8080` — orchestrates Phase 2 retraining (SSHOperator → GPU VM)
+- **Airflow** at `:8080` — orchestrates Phase 2 retraining through `gpu_vm_ssh`
 
-After startup, configure the `gpu_vm_ssh` connection in Airflow UI (Admin → Connections):
-
-| Field | Value |
-|-------|-------|
-| Conn Id | `gpu_vm_ssh` |
-| Conn Type | SSH |
-| Host | `<GPU VM IP>` |
-| Username | `cc` |
-| Private Key File | `/opt/airflow/ssh/airflow_gpu_key` |
-
-The SSH private key must be at `/home/cc/.ssh/airflow_gpu_key` on the Service VM and its
-public key must be in `~/.ssh/authorized_keys` on the GPU VM.
+The Airflow DAG expects the GPU VM to have `~/SpotyBoys` checked out on
+`feature/gpu-docker-training` and Docker Compose available. That environment is
+confirmed manually on the GPU VM.
 
 ---
 
@@ -218,25 +239,34 @@ public key must be in `~/.ssh/authorized_keys` on the GPU VM.
 git clone <repo-url> ~/SpotyBoys
 cd ~/SpotyBoys
 git checkout feature/gpu-docker-training
+git pull
 ```
 
-Edit `docker-compose.yml` — update:
-```yaml
-- MLFLOW_TRACKING_URI=http://<Service VM IP>:8000/
-- AWS_ACCESS_KEY_ID=<key>
-- AWS_SECRET_ACCESS_KEY=<secret>
-```
-
-Or move credentials to `.env` (recommended).
+Create `.env`:
 
 ```bash
-docker-compose build   # once
+cat > .env << 'EOF'
+AWS_ACCESS_KEY_ID=<your-key>
+AWS_SECRET_ACCESS_KEY=<your-secret>
+AWS_ENDPOINT_URL=https://chi.tacc.chameleoncloud.org:7480
+ARTIFACT_BUCKET=proj23-mlflow-artifacts
+MLFLOW_TRACKING_URI=http://<SERVICE_VM_IP>:8000/
+SPOTIBOYS_SERVICE_BASE_URL=http://<SERVICE_VM_IP>:8089
+SPOTIBOYS_SERVICE_ADMIN_TOKEN=
+EOF
+chmod 600 .env
+```
+
+```bash
+docker compose build   # once
+nvidia-smi
+docker compose run --rm training python3 -c "import torch; print(torch.cuda.is_available())"
 ```
 
 ### Phase 1 — Initial training on 30Music data
 
 ```bash
-docker-compose run training bash scripts/retrain.sh \
+docker compose run --rm training bash scripts/retrain.sh \
   --phase1 --retrieve-version 20260417_051148
 ```
 
@@ -244,7 +274,7 @@ Review runs in MLflow UI at `http://<Service VM>:8000/`, experiment `"training b
 
 Promote best run manually:
 ```bash
-docker-compose run training python3 scripts/promote.py \
+docker compose run --rm training python3 scripts/promote.py \
   --mode manual --retrieve-version 20260417_051148
 ```
 
@@ -256,7 +286,7 @@ Triggered automatically by Airflow when `delta-export-worker` accumulates ≥100
 complete-play events, or run manually:
 
 ```bash
-docker-compose run training bash scripts/retrain.sh --phase2
+docker compose run --rm training bash scripts/retrain.sh --phase2
 ```
 
 `retrain.sh --phase2` downloads **all** `session_event/delta/` partitions from S3 recursively
@@ -305,8 +335,8 @@ scripts/retrain.sh --phase2
     ├── train GRU ranker
     └── promote.py --mode auto → Real_service/{NEW_VERSION}/ in S3
     │
-    ▼  (next Service VM restart or artifact-fetch-worker manual run)
-new serving bundle loaded by recommendation-api
+    ▼  POST /admin/refresh-serving-bundle
+recommendation-api fetches the newest bundle and reloads it in-process
 ```
 
 ---
@@ -317,7 +347,7 @@ new serving bundle loaded by recommendation-api
 # Service health and status
 docker compose ps
 curl http://localhost:8089/health
-curl http://localhost:8089/ready
+curl http://localhost:8089/recommendation-ready
 
 # Live logs
 docker compose logs -f recommendation-api
@@ -350,6 +380,9 @@ curl -s -X POST http://localhost:8089/admin/trigger-retrain \
 # Manually refresh the online serving bundle after a successful training promote
 curl -s -X POST http://localhost:8089/admin/refresh-serving-bundle
 
+# Confirm the API loaded the active bundle version
+curl http://localhost:8089/recommendation-ready
+
 # Re-seed 30Music users (if seed-users-worker failed at first boot)
 docker compose run --rm seed-users-worker python scripts/seed_30music_users.py
 
@@ -359,7 +392,7 @@ docker compose up --build -d               # restart with code changes
 
 # Full reset (wipes DB and artifacts — use with caution)
 docker compose down
-rm -rf /mnt/mlflow_persist/spotiboys/
+rm -rf /mnt/mlflow_persist/spotiboys_v2/
 # Re-run Step 1, then docker compose up --build -d
 ```
 
