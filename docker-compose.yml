@@ -35,6 +35,7 @@ services:
     environment:
       ND_SCANSCHEDULE: "1m"
       ND_LOGLEVEL: info
+      ND_DATAFOLDER: /data
       ND_MUSICFOLDER: /music
       ND_EXTAUTH_TRUSTEDSOURCES: "0.0.0.0/0"
       ND_EXTAUTH_USERHEADER: "Remote-User"
@@ -159,6 +160,8 @@ services:
       seed-users-worker:
         condition: service_completed_successfully
       catalog-sync-worker:
+        condition: service_completed_successfully
+      navidrome-metadata-sync-worker:
         condition: service_completed_successfully
       artifact-fetch-worker:
         condition: service_completed_successfully

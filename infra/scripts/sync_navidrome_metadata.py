@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import sqlite3
+import time
 from pathlib import Path
 from typing import Iterable
 
@@ -64,24 +65,35 @@ def _find_navidrome_db(root: Path = Path("/data")) -> Path | None:
         root / "navidrome.db",
         root / "db" / "navidrome.db",
     ]
-    candidates.extend(sorted(root.rglob("*.db")) if root.exists() else [])
-    candidates.extend(sorted(root.rglob("*.sqlite")) if root.exists() else [])
+    if root.exists():
+        candidates.extend(sorted(root.rglob("*.db")))
+        candidates.extend(sorted(root.rglob("*.sqlite")))
     for candidate in candidates:
         if candidate.exists() and candidate.is_file():
             return candidate
     return None
 
 
-def sync_metadata(db_path: Path, manifest_path: Path) -> int:
+def _wait_for_db(db_path: Path, timeout_seconds: int) -> Path | None:
+    deadline = time.monotonic() + max(0, timeout_seconds)
+    root = db_path.parent if db_path.parent.exists() else Path("/data")
+    while True:
+        if db_path.exists():
+            return db_path
+        found = _find_navidrome_db(root)
+        if found:
+            return found
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(2)
+
+
+def sync_metadata(db_path: Path, manifest_path: Path, *, wait_seconds: int = 300) -> int:
+    db_path = _wait_for_db(db_path, wait_seconds) or db_path
     if not db_path.exists():
-        found = _find_navidrome_db(db_path.parent if db_path.parent.exists() else Path("/data"))
-        if found is None:
-            print(f"warning: Navidrome DB not found: {db_path}; skipping metadata sync", flush=True)
-            return 0
-        db_path = found
+        raise FileNotFoundError(f"Navidrome DB not found under {db_path.parent}")
     if not manifest_path.exists():
-        print(f"warning: music manifest not found: {manifest_path}; skipping metadata sync", flush=True)
-        return 0
+        raise FileNotFoundError(f"music manifest not found: {manifest_path}")
 
     rows = _manifest_rows(manifest_path)
     if not rows:
@@ -116,8 +128,9 @@ def main(argv: Iterable[str] | None = None) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", type=Path, default=DEFAULT_DB)
     parser.add_argument("--manifest", type=Path, default=DEFAULT_MANIFEST)
+    parser.add_argument("--wait-seconds", type=int, default=300)
     args = parser.parse_args(list(argv) if argv is not None else None)
-    updated = sync_metadata(args.db, args.manifest)
+    updated = sync_metadata(args.db, args.manifest, wait_seconds=args.wait_seconds)
     print(f"Navidrome metadata rows updated: {updated}", flush=True)
 
 
