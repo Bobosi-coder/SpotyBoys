@@ -145,17 +145,30 @@ def run_export() -> None:
             # are not skipped after their session_int_id is watermarked.
             cur.execute(
                 """
-                SELECT session_int_id AS session_id, user_int_id AS user_id,
-                       position, track_id,
-                       playratio::float AS playratio,
-                       CASE WHEN playratio > 0.8 THEN 'positive'
-                            WHEN playratio > 0.2 THEN 'neutral'
-                            ELSE 'skip' END AS label
-                FROM app.playback_events
-                WHERE playratio IS NOT NULL
-                  AND created_at > %s
+                SELECT session_id, user_id, position, track_id, playratio, label
+                FROM (
+                    -- ROW_NUMBER runs over the full session history (no time filter)
+                    -- so that position is the true temporal slot within the session,
+                    -- even if earlier events were exported in a previous delta window.
+                    SELECT session_int_id AS session_id,
+                           user_int_id   AS user_id,
+                           (ROW_NUMBER() OVER (
+                               PARTITION BY session_int_id
+                               ORDER BY created_at, event_id
+                           ) - 1)::int AS position,
+                           track_id,
+                           playratio::float AS playratio,
+                           CASE WHEN playratio > 0.8 THEN 'positive'
+                                WHEN playratio > 0.2 THEN 'neutral'
+                                WHEN playratio < 0.2 THEN 'skip'
+                                ELSE 'skip' END AS label,
+                           created_at
+                    FROM app.playback_events
+                    WHERE playratio IS NOT NULL
+                ) all_events
+                WHERE created_at > %s
                   AND created_at <= %s
-                ORDER BY created_at, event_id
+                ORDER BY session_id, position
                 """,
                 (last_exported_at, export_cutoff),
             )
