@@ -6,11 +6,37 @@
  import LibrarySelector from '../common/LibrarySelector'
 +import RecommendIcon from '@material-ui/icons/Queue'
  import config from '../config'
-
+ 
  const useStyles = makeStyles((theme) => ({
-@@ -139,6 +140,14 @@
+@@ -113,19 +114,9 @@
+       })}
+     >
+       {open && <LibrarySelector />}
+-      <SubMenu
+-        handleToggle={() => handleToggle('menuAlbumList')}
+-        isOpen={state.menuAlbumList}
+-        sidebarIsOpen={open}
+-        name="menu.albumList"
+-        icon={<AlbumIcon />}
+-        dense={dense}
+-      >
+-        {Object.keys(albumLists).map((type) =>
+-          renderAlbumMenuItemLink(type, albumLists[type]),
+-        )}
+-      </SubMenu>
+-      {resources.filter(subItems(undefined)).map(renderResourceMenuItemLink)}
++      {resources
++        .filter((resource) => ['artist', 'song'].includes(resource.name))
++        .map(renderResourceMenuItemLink)}
+       {config.devSidebarPlaylists && open ? (
+         <>
+           <Divider />
+@@ -137,8 +128,16 @@
+           />
+         </>
        ) : (
-         resources.filter(subItems('playlist')).map(renderResourceMenuItemLink)
+-        resources.filter(subItems('playlist')).map(renderResourceMenuItemLink)
++        []
        )}
 +      <MenuItemLink
 +        to="/recommendations"
