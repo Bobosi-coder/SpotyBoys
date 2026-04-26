@@ -357,70 +357,51 @@ def _sync_artists(conn: sqlite3.Connection, media_table: str) -> int:
         """
     )
     print("refreshing Navidrome library_artist stats", flush=True)
+    conn.execute("DROP TABLE IF EXISTS temp.spotiboys_artist_stats")
+    conn.execute(
+        f"""
+        CREATE TEMP TABLE spotiboys_artist_stats AS
+        WITH base AS (
+            SELECT m.artist_id,
+                   mf.library_id,
+                   count(DISTINCT mf.album_id) AS album_count,
+                   count(DISTINCT mf.id) AS media_count,
+                   sum(mf.size) AS size
+            FROM spotiboys_metadata m
+            JOIN {quoted_media} mf
+              ON m.filename = mf.path OR m.track_id = mf.title
+            WHERE m.artist_id <> ''
+            GROUP BY m.artist_id, mf.library_id
+        )
+        SELECT artist_id,
+               library_id,
+               json_object(
+                   'albumartist', json_object('a', album_count, 'm', media_count, 's', coalesce(size, 0)),
+                   'artist', json_object('a', album_count, 'm', media_count, 's', coalesce(size, 0)),
+                   'total', json_object('a', album_count, 'm', media_count, 's', coalesce(size, 0)),
+                   'maincredit', json_object('a', album_count, 'm', media_count, 's', coalesce(size, 0))
+               ) AS stats
+        FROM base
+        """
+    )
+    conn.execute(
+        "CREATE INDEX temp.idx_spotiboys_artist_stats "
+        "ON spotiboys_artist_stats(artist_id, library_id)"
+    )
+    stats_rows = int(
+        conn.execute("SELECT COUNT(*) FROM spotiboys_artist_stats").fetchone()[0] or 0
+    )
+    print(f"Navidrome library_artist stats rows prepared: {stats_rows}", flush=True)
     conn.execute(
         """
-        WITH artist_role_counters AS (
-            SELECT mfa.artist_id,
-                   mf.library_id,
-                   mfa.role,
-                   count(DISTINCT mf.album_id) AS album_count,
-                   count(DISTINCT mf.id) AS media_count,
-                   sum(mf.size) AS size
-            FROM media_file_artists mfa
-            JOIN media_file mf ON mfa.media_file_id = mf.id
-            WHERE mfa.artist_id IN (SELECT DISTINCT artist_id FROM spotiboys_metadata)
-            GROUP BY mfa.artist_id, mf.library_id, mfa.role
-        ),
-        artist_total_counters AS (
-            SELECT mfa.artist_id,
-                   mf.library_id,
-                   'total' AS role,
-                   count(DISTINCT mf.album_id) AS album_count,
-                   count(DISTINCT mf.id) AS media_count,
-                   sum(mf.size) AS size
-            FROM media_file_artists mfa
-            JOIN media_file mf ON mfa.media_file_id = mf.id
-            WHERE mfa.artist_id IN (SELECT DISTINCT artist_id FROM spotiboys_metadata)
-            GROUP BY mfa.artist_id, mf.library_id
-        ),
-        artist_participant_counter AS (
-            SELECT mfa.artist_id,
-                   mf.library_id,
-                   'maincredit' AS role,
-                   count(DISTINCT mf.album_id) AS album_count,
-                   count(DISTINCT mf.id) AS media_count,
-                   sum(mf.size) AS size
-            FROM media_file_artists mfa
-            JOIN media_file mf ON mfa.media_file_id = mf.id
-            WHERE mfa.artist_id IN (SELECT DISTINCT artist_id FROM spotiboys_metadata)
-              AND mfa.role IN ('albumartist', 'artist')
-            GROUP BY mfa.artist_id, mf.library_id
-        ),
-        combined_counters AS (
-            SELECT artist_id, library_id, role, album_count, media_count, size FROM artist_role_counters
-            UNION ALL
-            SELECT artist_id, library_id, role, album_count, media_count, size FROM artist_total_counters
-            UNION ALL
-            SELECT artist_id, library_id, role, album_count, media_count, size FROM artist_participant_counter
-        ),
-        library_artist_counters AS (
-            SELECT artist_id,
-                   library_id,
-                   json_group_object(
-                       role,
-                       json_object('a', album_count, 'm', media_count, 's', coalesce(size, 0))
-                   ) AS counters
-            FROM combined_counters
-            GROUP BY artist_id, library_id
-        )
         UPDATE library_artist
         SET stats = coalesce((
-            SELECT counters
-            FROM library_artist_counters lac
-            WHERE lac.artist_id = library_artist.artist_id
-              AND lac.library_id = library_artist.library_id
+            SELECT sas.stats
+            FROM spotiboys_artist_stats sas
+            WHERE sas.artist_id = library_artist.artist_id
+              AND sas.library_id = library_artist.library_id
         ), '{}')
-        WHERE library_artist.artist_id IN (SELECT DISTINCT artist_id FROM spotiboys_metadata)
+        WHERE library_artist.artist_id IN (SELECT artist_id FROM spotiboys_artist_stats)
         """
     )
     return relation_rows
