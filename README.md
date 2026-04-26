@@ -108,9 +108,10 @@ docker compose up --build -d
 
 **First-boot startup order:**
 1. `postgres` passes healthcheck
-2. In parallel: `seed-users-worker`, `catalog-sync-worker`, `artifact-fetch-worker`
-3. `recommendation-api` starts (waits for the one-shot workers above to exit 0)
-4. `delta-export-worker` and `nginx` start
+2. `navidrome-extauth-bootstrap` creates the internal `spotiboys` ExtAuth user
+3. In parallel: `seed-users-worker`, `catalog-sync-worker`, `artifact-fetch-worker`
+4. `recommendation-api` starts (waits for the one-shot workers above to exit 0)
+5. `delta-export-worker` and `nginx` start
 
 First startup is slower because:
 - `artifact-fetch-worker` downloads ~500 MB of model artifacts from S3
@@ -125,14 +126,15 @@ First startup is slower because:
 docker compose ps
 
 # Watch one-shot workers
+docker compose logs -f navidrome-extauth-bootstrap # creates internal ExtAuth service user
 docker compose logs -f seed-users-worker     # imports ~45k 30Music users from S3
 docker compose logs -f catalog-sync-worker   # maps music library → Navidrome IDs
 docker compose logs -f artifact-fetch-worker # downloads model artifacts (~500 MB)
 docker compose logs -f recommendation-api    # confirm API is up
 ```
 
-One-shot jobs exit with code 0 when done: `seed-users-worker`, `catalog-sync-worker`,
-`artifact-fetch-worker`.
+One-shot jobs exit with code 0 when done: `navidrome-extauth-bootstrap`,
+`seed-users-worker`, `catalog-sync-worker`, `artifact-fetch-worker`.
 
 Long-running services stay `Up`: `postgres`, `redis`, `navidrome`, `recommendation-api`,
 `delta-export-worker`, `nginx`.
