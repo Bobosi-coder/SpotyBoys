@@ -4,10 +4,10 @@
  * A Navidrome-integrated recommendations UI powered by the SpotyBoys
  * recommendation-api (C1–C4 GRU pipeline).
  *
- * Shows "Up Next" (top 4 GRU predictions, larger cards) and
- * "Queue" (remaining 10 tracks, compact list).
+ * Shows "Up Next" (top 4 predictions, larger cards) and
+ * "Queue" (remaining recommendations plus exploration tracks).
  *
- * Clicking any track loads all 14 tracks into Navidrome's player queue
+ * Clicking any track loads the full recommendation queue into Navidrome's player queue
  * and starts playback immediately.
  *
  * Playback events (start / skip / complete) are captured by SpotiboysEventBridge

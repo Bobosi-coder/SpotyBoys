@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Dict, Iterable, List, Optional, Set
 
 from packages.shared_contracts.schemas import QueueItem, QueueState, utc_now
@@ -12,6 +13,7 @@ class InMemoryRuntimeState:
         self._queues: Dict[str, QueueState] = {}
         self._dedupe: Set[str] = set()
         self._recent_tracks: Dict[str, List[str]] = {}
+        self._recommended_tracks: Dict[str, List[str]] = {}
         self._strings: Dict[str, str] = {}
 
     def get_queue(self, session_id: str) -> QueueState:
@@ -45,6 +47,22 @@ class InMemoryRuntimeState:
     def append_recent_track(self, session_id: str, track_id: str, limit: int = 50) -> None:
         recent = [track_id, *[item for item in self._recent_tracks.get(session_id, []) if item != track_id]]
         self._recent_tracks[session_id] = recent[:limit]
+
+    def recommended_track_ids(self, session_id: str) -> List[str]:
+        return list(self._recommended_tracks.get(session_id, []))
+
+    def append_recommended_tracks(self, session_id: str, track_ids: Iterable[str], limit: int = 500) -> None:
+        existing = self._recommended_tracks.get(session_id, [])
+        seen: Set[str] = set()
+        merged: List[str] = []
+        for track_id in [*[str(item) for item in track_ids], *existing]:
+            if track_id in seen:
+                continue
+            seen.add(track_id)
+            merged.append(track_id)
+            if len(merged) >= limit:
+                break
+        self._recommended_tracks[session_id] = merged
 
     def get_string(self, key: str) -> Optional[str]:
         return self._strings.get(key)
@@ -94,6 +112,32 @@ class RedisRuntimeState:
         pipe.lpush(key, track_id)
         pipe.ltrim(key, 0, limit - 1)
         pipe.execute()
+
+    def recommended_track_ids(self, session_id: str) -> List[str]:
+        raw = self.client.get(f"sess:{session_id}:recommended_tracks")
+        if not raw:
+            return []
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(payload, list):
+            return []
+        return [str(item) for item in payload]
+
+    def append_recommended_tracks(self, session_id: str, track_ids: Iterable[str], limit: int = 500) -> None:
+        key = f"sess:{session_id}:recommended_tracks"
+        existing = self.recommended_track_ids(session_id)
+        seen: Set[str] = set()
+        merged: List[str] = []
+        for track_id in [*[str(item) for item in track_ids], *existing]:
+            if track_id in seen:
+                continue
+            seen.add(track_id)
+            merged.append(track_id)
+            if len(merged) >= limit:
+                break
+        self.client.set(key, json.dumps(merged), ex=60 * 60 * 24 * 14)
 
     def get_string(self, key: str) -> Optional[str]:
         return self.client.get(key)

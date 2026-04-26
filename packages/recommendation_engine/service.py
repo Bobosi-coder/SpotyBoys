@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import uuid
 from typing import Dict, List, Optional, Tuple
 
@@ -17,6 +18,8 @@ from packages.shared_contracts.schemas import (
     TrackItem,
     utc_now,
 )
+
+QUEUE_TRACK_LIMIT = 18
 
 
 class RecommendationService:
@@ -56,13 +59,16 @@ class RecommendationService:
     def build_bootstrap_surfaces(self, session_id: str, user_id: str) -> Tuple[BrowseSurface, List[QueueItem]]:
         request_id = f"req_bootstrap_{session_id}"
         impression_id = f"imp_bootstrap_{session_id}"
-        return self._compose_surfaces(request_id, impression_id, session_id, user_id)
+        browse_surface, queue_items = self._compose_surfaces(request_id, impression_id, session_id, user_id)
+        self._remember_recommended_tracks(session_id, queue_items)
+        return browse_surface, queue_items
 
     def recommend_next(self, request: RecommendationRequest) -> RecommendationResponse:
         request_id = request.request_id or f"req_{uuid.uuid4().hex}"
         impression_id = f"imp_{uuid.uuid4().hex}"
         browse_surface, queue_items = self._compose_surfaces(request_id, impression_id, request.session_id, request.user_id)
         queue_items = self._rotate_queue_items(queue_items, request.queue_revision)
+        self._remember_recommended_tracks(request.session_id, queue_items)
         queue = self.runtime_state.set_queue(
             request.session_id,
             queue_items,
@@ -104,6 +110,14 @@ class RecommendationService:
             for index, item in enumerate(rotated, start=1)
         ]
 
+    def _remember_recommended_tracks(self, session_id: str, queue_items: List[QueueItem]) -> None:
+        if not session_id:
+            return
+        self.runtime_state.append_recommended_tracks(
+            session_id,
+            [item.track_id for item in queue_items],
+        )
+
     def _compose_surfaces(
         self,
         request_id: str,
@@ -111,14 +125,22 @@ class RecommendationService:
         session_id: str = "",
         user_id: str = "",
     ) -> Tuple[BrowseSurface, List[QueueItem]]:
-        playable = self._rank_playable_tracks(
-            self.repository.list_playable_tracks(),
+        all_playable = self.repository.list_playable_tracks()
+        ranked = self._rank_playable_tracks(
+            all_playable,
             session_id=session_id,
             user_id=user_id,
         )
+        playable = self._expand_with_exploration(
+            ranked,
+            all_playable,
+            session_id=session_id,
+            request_id=request_id,
+            limit=QUEUE_TRACK_LIMIT,
+        )
         featured = playable[:4]
         random_items = playable[4:14]
-        queue_tracks = playable[:8]
+        queue_tracks = playable[:QUEUE_TRACK_LIMIT]
         browse_surface = BrowseSurface(
             featured_items=[
                 self._to_track_item(track, BrowseSurfaceSlot(f"featured_{idx}"))
@@ -145,6 +167,57 @@ class RecommendationService:
             for idx, track in enumerate(queue_tracks, start=1)
         ]
         return browse_surface, queue_items
+
+    def _expand_with_exploration(
+        self,
+        ranked: List[PlayableTrackRecord],
+        all_playable: List[PlayableTrackRecord],
+        *,
+        session_id: str,
+        request_id: str,
+        limit: int,
+    ) -> List[PlayableTrackRecord]:
+        recently_played = set(self.runtime_state.recent_track_ids(session_id)) if session_id else set()
+        previously_recommended = (
+            set(self.runtime_state.recommended_track_ids(session_id))
+            if session_id and hasattr(self.runtime_state, "recommended_track_ids")
+            else set()
+        )
+        excluded = recently_played | previously_recommended
+
+        selected: List[PlayableTrackRecord] = []
+        selected_ids: set[str] = set()
+        for track in ranked:
+            if track.track_id in excluded or track.track_id in selected_ids:
+                continue
+            selected.append(track)
+            selected_ids.add(track.track_id)
+            if len(selected) >= limit:
+                return selected
+
+        exploration_pool = [
+            track
+            for track in all_playable
+            if track.track_id not in excluded and track.track_id not in selected_ids
+        ]
+        rng = random.Random(f"{session_id}:{request_id}:{len(previously_recommended)}")
+        rng.shuffle(exploration_pool)
+        for track in exploration_pool:
+            selected.append(track)
+            selected_ids.add(track.track_id)
+            if len(selected) >= limit:
+                return selected
+
+        # If a long demo session exhausts all unseen songs, gracefully refill with
+        # ranked tracks instead of returning an empty recommendation page.
+        for track in ranked:
+            if track.track_id in selected_ids:
+                continue
+            selected.append(track)
+            selected_ids.add(track.track_id)
+            if len(selected) >= limit:
+                break
+        return selected
 
     @staticmethod
     def _to_track_item(track: PlayableTrackRecord, slot: BrowseSurfaceSlot) -> TrackItem:
