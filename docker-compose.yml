@@ -160,8 +160,6 @@ services:
         condition: service_completed_successfully
       catalog-sync-worker:
         condition: service_completed_successfully
-      navidrome-metadata-sync-worker:
-        condition: service_completed_successfully
       artifact-fetch-worker:
         condition: service_completed_successfully
 

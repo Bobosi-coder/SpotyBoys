@@ -58,11 +58,30 @@ def _candidate_tables(conn: sqlite3.Connection) -> list[str]:
     return [name for name in preferred if name in tables]
 
 
+def _find_navidrome_db(root: Path = Path("/data")) -> Path | None:
+    candidates = [
+        DEFAULT_DB,
+        root / "navidrome.db",
+        root / "db" / "navidrome.db",
+    ]
+    candidates.extend(sorted(root.rglob("*.db")) if root.exists() else [])
+    candidates.extend(sorted(root.rglob("*.sqlite")) if root.exists() else [])
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
 def sync_metadata(db_path: Path, manifest_path: Path) -> int:
     if not db_path.exists():
-        raise FileNotFoundError(f"Navidrome DB not found: {db_path}")
+        found = _find_navidrome_db(db_path.parent if db_path.parent.exists() else Path("/data"))
+        if found is None:
+            print(f"warning: Navidrome DB not found: {db_path}; skipping metadata sync", flush=True)
+            return 0
+        db_path = found
     if not manifest_path.exists():
-        raise FileNotFoundError(f"music manifest not found: {manifest_path}")
+        print(f"warning: music manifest not found: {manifest_path}; skipping metadata sync", flush=True)
+        return 0
 
     rows = _manifest_rows(manifest_path)
     if not rows:
