@@ -156,6 +156,85 @@ class PostgresRepository:
                     ),
                 )
 
+    def bulk_upsert_playable_mappings(
+        self,
+        mappings: List[tuple[str, str, str, Optional[str]]],
+    ) -> int:
+        deduped: Dict[str, tuple[str, str, str, Optional[str]]] = {}
+        for track_id, navidrome_track_id, availability_status, quarantine_reason in mappings:
+            if not track_id or not navidrome_track_id:
+                continue
+            track_key = str(track_id)
+            deduped[track_key] = (
+                track_key,
+                str(navidrome_track_id),
+                availability_status,
+                quarantine_reason,
+            )
+        rows = list(deduped.values())
+        if not rows:
+            return 0
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    CREATE TEMP TABLE tmp_playable_mappings (
+                        track_id TEXT PRIMARY KEY,
+                        navidrome_track_id TEXT NOT NULL,
+                        availability_status TEXT NOT NULL,
+                        quarantine_reason TEXT
+                    ) ON COMMIT DROP
+                    """
+                )
+                from psycopg2.extras import execute_values
+
+                execute_values(
+                    cur,
+                    """
+                    INSERT INTO tmp_playable_mappings
+                        (track_id, navidrome_track_id, availability_status, quarantine_reason)
+                    VALUES %s
+                    ON CONFLICT (track_id) DO UPDATE SET
+                        navidrome_track_id = EXCLUDED.navidrome_track_id,
+                        availability_status = EXCLUDED.availability_status,
+                        quarantine_reason = EXCLUDED.quarantine_reason
+                    """,
+                    rows,
+                    page_size=10000,
+                )
+                cur.execute(
+                    """
+                    UPDATE app.playable_tracks p
+                    SET navidrome_track_id = m.navidrome_track_id,
+                        is_playable = (m.availability_status = 'available' AND m.quarantine_reason IS NULL),
+                        availability_status = m.availability_status,
+                        quarantine_reason = m.quarantine_reason
+                    FROM tmp_playable_mappings m
+                    WHERE p.track_id = m.track_id
+                      AND (
+                        p.navidrome_track_id IS DISTINCT FROM m.navidrome_track_id
+                        OR p.availability_status IS DISTINCT FROM m.availability_status
+                        OR p.quarantine_reason IS DISTINCT FROM m.quarantine_reason
+                        OR p.is_playable IS DISTINCT FROM (
+                            m.availability_status = 'available' AND m.quarantine_reason IS NULL
+                        )
+                      )
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM app.playable_tracks p2
+                        WHERE p2.navidrome_track_id = m.navidrome_track_id
+                          AND p2.track_id != p.track_id
+                          AND NOT EXISTS (
+                            SELECT 1
+                            FROM tmp_playable_mappings m2
+                            WHERE m2.track_id = p2.track_id
+                              AND m2.navidrome_track_id IS DISTINCT FROM m.navidrome_track_id
+                          )
+                      )
+                    """
+                )
+                return int(cur.rowcount or 0)
+
     @staticmethod
     def _track_from_row(row) -> PlayableTrackRecord:
         return PlayableTrackRecord(

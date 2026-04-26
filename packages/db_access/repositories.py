@@ -336,5 +336,23 @@ class DemoRepository:
             quarantine_reason=quarantine_reason,
         )
 
+    def bulk_upsert_playable_mappings(
+        self,
+        mappings: Iterable[tuple[str, str, str, Optional[str]]],
+    ) -> int:
+        updated = 0
+        for track_id, navidrome_track_id, availability_status, quarantine_reason in mappings:
+            before = self._tracks.get(str(track_id))
+            self.upsert_playable_mapping(
+                str(track_id),
+                str(navidrome_track_id),
+                availability_status=availability_status,
+                quarantine_reason=quarantine_reason,
+            )
+            after = self._tracks.get(str(track_id))
+            if before != after:
+                updated += 1
+        return updated
+
     def upsert_playable_track(self, track: PlayableTrackRecord) -> None:
         self._tracks[track.track_id] = track

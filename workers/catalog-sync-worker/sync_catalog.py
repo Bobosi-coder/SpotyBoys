@@ -31,11 +31,13 @@ def sync_catalog() -> int:
     total = len(rows)
     progress_every = max(1, int(os.environ.get("SPOTIBOYS_CATALOG_PROGRESS_EVERY", "500") or "500"))
     started_at = time.monotonic()
-    synced = 0
+    verified = 0
+    remap_candidates = 0
     missing_required = 0
     quarantine_rows = 0
     duplicate_track_ids = 0
     mapping_failures = 0
+    pending_mappings: list[tuple[str, str, str, str | None]] = []
 
     mapped_track_map: dict[str, str] = {}
     if hasattr(repository, "get_mapped_track_map"):
@@ -49,7 +51,7 @@ def sync_catalog() -> int:
     quarantine_rows = sum(1 for row in rows if row.get("quarantine_reason"))
     print(
         f"catalog sync starting: total={total} limit={limit or 'none'} "
-        f"already_mapped={len(already_mapped)} will_skip={skipped}",
+        f"already_mapped={len(already_mapped)} will_verify={skipped}",
         flush=True,
     )
 
@@ -96,35 +98,55 @@ def sync_catalog() -> int:
             and navidrome_track_id
             and mapped_track_map.get(track_id) == str(navidrome_track_id)
         ):
+            verified += 1
             if index == 1 or index % progress_every == 0 or index == total:
-                _print_progress(index, total, synced, started_at)
+                _print_progress(index, total, verified, remap_candidates, started_at)
             continue
 
         if not navidrome_track_id:
             if track_id in already_mapped:
+                verified += 1
                 if index == 1 or index % progress_every == 0 or index == total:
-                    _print_progress(index, total, synced, started_at)
+                    _print_progress(index, total, verified, remap_candidates, started_at)
                 continue
             mapping_failures += 1
             if index == 1 or index % progress_every == 0 or index == total:
-                _print_progress(index, total, synced, started_at)
+                _print_progress(index, total, verified, remap_candidates, started_at)
             continue
         availability = str(row.get("availability_status", "available"))
-        repository.upsert_playable_mapping(
-            track_id,
-            str(navidrome_track_id),
-            mapping_confidence=float(row.get("mapping_confidence", 1.0)),
-            availability_status=availability,
-            quarantine_reason=row.get("quarantine_reason"),
-        )
-        synced += 1
+        pending_mappings.append((track_id, str(navidrome_track_id), availability, row.get("quarantine_reason")))
+        remap_candidates += 1
         if index == 1 or index % progress_every == 0 or index == total:
-            _print_progress(index, total, synced, started_at)
+            _print_progress(index, total, verified, remap_candidates, started_at)
+
+    print(
+        "catalog sync applying mappings: "
+        f"verified={verified} remap_candidates={remap_candidates} missing={mapping_failures}",
+        flush=True,
+    )
+    if hasattr(repository, "bulk_upsert_playable_mappings"):
+        synced = repository.bulk_upsert_playable_mappings(pending_mappings)
+    else:
+        synced = 0
+        for track_id, navidrome_track_id, availability, quarantine_reason in pending_mappings:
+            repository.upsert_playable_mapping(
+                track_id,
+                navidrome_track_id,
+                mapping_confidence=1.0,
+                availability_status=availability,
+                quarantine_reason=quarantine_reason,
+            )
+            synced += 1
+    print(
+        "catalog sync mappings applied: "
+        f"updated={synced} verified={verified} missing={mapping_failures}",
+        flush=True,
+    )
     report = _build_ingestion_quality_report(
         total_rows=total,
         missing_required=missing_required,
         duplicate_track_ids=duplicate_track_ids,
-        mapped_rows=synced + skipped,
+        mapped_rows=verified + synced,
         quarantine_rows=quarantine_rows,
     )
     report_path = _write_quality_report(config.object_storage_root, "ingestion", report)
@@ -132,7 +154,13 @@ def sync_catalog() -> int:
     return synced
 
 
-def _print_progress(processed: int, total: int, synced: int, started_at: float) -> None:
+def _print_progress(
+    processed: int,
+    total: int,
+    verified: int,
+    remap_candidates: int,
+    started_at: float,
+) -> None:
     elapsed = max(0.001, time.monotonic() - started_at)
     rate = processed / elapsed
     remaining = max(0, total - processed)
@@ -142,7 +170,8 @@ def _print_progress(processed: int, total: int, synced: int, started_at: float) 
         "catalog sync progress: "
         f"processed={processed}/{total} "
         f"percent={percent:.2f}% "
-        f"synced={synced} "
+        f"verified={verified} "
+        f"remap_candidates={remap_candidates} "
         f"rate={rate:.1f}/s "
         f"elapsed={_format_seconds(int(elapsed))} "
         f"eta={_format_seconds(eta_seconds)}",
