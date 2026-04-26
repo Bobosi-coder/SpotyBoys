@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import json
 import shutil
+import uuid
 from pathlib import Path
 from typing import Iterable, List
 
@@ -107,14 +108,10 @@ def _prefix_complete(prefix: str, destination: Path) -> bool:
 
 def _stage_runtime(real_service_dir: Path, item2vec_dir: Path) -> Path:
     ACTIVE_ROOT.mkdir(parents=True, exist_ok=True)
-    for child in ACTIVE_ROOT.iterdir():
-        if child.is_dir():
-            shutil.rmtree(child)
-        else:
-            child.unlink()
-    active_bundle = ACTIVE_ROOT / "Real_service" / "active"
-    runtime_retriever = ACTIVE_ROOT / "runtime" / "retriever"
-    runtime_item2vec = ACTIVE_ROOT / "runtime" / "item2vec"
+    staging_root = ACTIVE_ROOT / f".staging-{uuid.uuid4().hex}"
+    active_bundle = staging_root / "Real_service" / "active"
+    runtime_retriever = staging_root / "runtime" / "retriever"
+    runtime_item2vec = staging_root / "runtime" / "item2vec"
     shutil.copytree(real_service_dir, active_bundle)
     _normalize_serving_manifest(active_bundle)
     shutil.copytree(item2vec_dir, runtime_item2vec)
@@ -125,7 +122,21 @@ def _stage_runtime(real_service_dir: Path, item2vec_dir: Path) -> Path:
     )
     _copy_files(real_service_dir, runtime_retriever / "popularity", ["pop_scores.csv"])
     _copy_files(real_service_dir, runtime_retriever / "pref_nn", ["user_centroids.pkl"])
+    validate_serving_bundle_directory(active_bundle)
+    _replace_dir(staging_root / "Real_service", ACTIVE_ROOT / "Real_service")
+    _replace_dir(staging_root / "runtime", ACTIVE_ROOT / "runtime")
+    shutil.rmtree(staging_root, ignore_errors=True)
     return ACTIVE_ROOT
+
+
+def _replace_dir(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    backup = destination.with_name(f".{destination.name}.old-{uuid.uuid4().hex}")
+    if destination.exists():
+        destination.replace(backup)
+    source.replace(destination)
+    if backup.exists():
+        shutil.rmtree(backup)
 
 
 def _normalize_serving_manifest(active_bundle: Path) -> None:

@@ -93,6 +93,7 @@ S3_ENDPOINT=https://chi.tacc.chameleoncloud.org:7480
 S3_NO_VERIFY_SSL=true
 ARTIFACT_BUCKET=proj23-mlflow-artifacts
 SPOTIBOYS_PUBLIC_BASE_URL=http://<VM_PUBLIC_IP>:8089
+SPOTIBOYS_ADMIN_TOKEN=
 AIRFLOW_BASE_URL=http://host.docker.internal:8080
 AIRFLOW_USERNAME=admin
 AIRFLOW_PASSWORD=admin
@@ -345,6 +346,9 @@ TOKEN=$(curl -s -X POST http://localhost:8089/spotiboys/auth/login \
   -d '{"email":"40305@navidrome.local","password":"test123"}' | python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
 curl -s -X POST http://localhost:8089/admin/trigger-retrain \
   -H "Authorization: Bearer $TOKEN"
+
+# Manually refresh the online serving bundle after a successful training promote
+curl -s -X POST http://localhost:8089/admin/refresh-serving-bundle
 
 # Re-seed 30Music users (if seed-users-worker failed at first boot)
 docker compose run --rm seed-users-worker python scripts/seed_30music_users.py

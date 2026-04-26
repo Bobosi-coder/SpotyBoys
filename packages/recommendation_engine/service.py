@@ -46,6 +46,13 @@ class RecommendationService:
     def last_pipeline_trace(self) -> PipelineTrace | None:
         return self.pipeline.last_trace if self.pipeline else None
 
+    def reload_serving_bundle(self, serving_bundle: ServingBundle, *, require_full_ml_pipeline: bool = False) -> None:
+        self.serving_bundle = serving_bundle
+        self.pipeline = ServingRecommendationPipeline(
+            serving_bundle,
+            require_full_runtime=require_full_ml_pipeline,
+        )
+
     def build_bootstrap_surfaces(self, session_id: str, user_id: str) -> Tuple[BrowseSurface, List[QueueItem]]:
         request_id = f"req_bootstrap_{session_id}"
         impression_id = f"imp_bootstrap_{session_id}"

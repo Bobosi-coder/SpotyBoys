@@ -125,6 +125,7 @@ services:
       AIRFLOW_BASE_URL: ${AIRFLOW_BASE_URL:-http://host.docker.internal:8080}
       AIRFLOW_USERNAME: ${AIRFLOW_USERNAME:-admin}
       AIRFLOW_PASSWORD: ${AIRFLOW_PASSWORD:-admin}
+      SPOTIBOYS_ADMIN_TOKEN: ${SPOTIBOYS_ADMIN_TOKEN:-}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-https://chi.tacc.chameleoncloud.org:7480}
@@ -134,7 +135,7 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - /mnt/mlflow_persist_large/music:/music:ro
-      - /mnt/mlflow_persist/spotiboys_v2/serving-bundle:/serving-bundle:ro
+      - /mnt/mlflow_persist/spotiboys_v2/serving-bundle:/serving-bundle
     depends_on:
       postgres:
         condition: service_healthy

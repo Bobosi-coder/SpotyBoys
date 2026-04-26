@@ -310,6 +310,16 @@ class PostgresRepository:
                 )
                 return cur.fetchone()[0]
 
+    def get_rec_session_int_id(self, session_id: str) -> Optional[int]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT session_int_id FROM app.rec_sessions WHERE session_id = %s",
+                    (session_id,),
+                )
+                row = cur.fetchone()
+                return int(row[0]) if row else None
+
     # ------------------------------------------------------------------ #
     # Playback events
     # ------------------------------------------------------------------ #

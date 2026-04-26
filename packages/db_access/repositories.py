@@ -34,6 +34,7 @@ class DemoRepository:
         self.recommendation_impressions: Dict[str, Dict[str, Any]] = {}
         self.rendered_impressions: Dict[str, Dict[str, Any]] = {}
         self.playback_events: Dict[str, Dict[str, Any]] = {}
+        self.rec_sessions: Dict[str, int] = {}
         self.feedback_events: Dict[str, Dict[str, Any]] = {}
         self.serving_request_metrics: Dict[str, Dict[str, Any]] = {}
         self.serving_metric_rollups: Dict[str, Dict[str, Any]] = {}
@@ -191,7 +192,11 @@ class DemoRepository:
 
     def create_rec_session(self, session_id: str, user_int_id: int) -> int:
         self._next_session_int_id = getattr(self, "_next_session_int_id", 3000000) + 1
+        self.rec_sessions[session_id] = self._next_session_int_id
         return self._next_session_int_id
+
+    def get_rec_session_int_id(self, session_id: str) -> Optional[int]:
+        return self.rec_sessions.get(session_id)
 
     def insert_playback_event(self, *, event_id: str, session_int_id: int, user_int_id: int,
                                track_id: str, position: int, event_type: str) -> None:

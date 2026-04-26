@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -23,6 +24,7 @@ from packages.auth import (
 )
 from packages.config import load_config
 from packages.db_access.factory import build_repository_and_runtime
+from infra.scripts.refresh_serving_bundle import refresh_serving_bundle
 from packages.navidrome_adapter import MediaAccessService
 from packages.recommendation_engine import RecommendationService
 from packages.shared_contracts.schemas import (
@@ -44,6 +46,7 @@ recommendation_service = RecommendationService(
     require_full_ml_pipeline=config.require_full_ml_pipeline,
 )
 media_service = MediaAccessService(repository, config=config)
+_serving_reload_lock = threading.Lock()
 
 app = FastAPI(title="SpotiBoys Recommendation API", version="2.0.0")
 app.add_middleware(
@@ -275,7 +278,12 @@ def bootstrap(request: Request) -> dict:
 
     if not session_id or not queue or not queue.items:
         session_id = new_session_id()
-        repository.create_rec_session(session_id, user_int_id)
+        session_int_id = repository.create_rec_session(session_id, user_int_id)
+        runtime_state.set_string(
+            f"sess_int:{session_id}",
+            str(session_int_id),
+            ttl_seconds=60 * 60 * 24 * 14,
+        )
         runtime_state.set_string(stable_key, session_id, ttl_seconds=60 * 60 * 24 * 14)
 
         _, queue_items = recommendation_service.build_bootstrap_surfaces(
@@ -283,6 +291,8 @@ def bootstrap(request: Request) -> dict:
             auth_session.user_id,
         )
         queue = runtime_state.set_queue(session_id, queue_items)
+    else:
+        _ensure_session_int_cache(session_id)
 
     # Check model degraded flag (Redis-cached)
     model_degraded = _check_model_degraded()
@@ -378,7 +388,10 @@ def playback_event(payload: PlaybackEventBody, request: Request) -> dict:
     # Resolve session_int_id from rec_sessions via Redis (set at bootstrap)
     session_int_id_key = f"sess_int:{payload.session_id}"
     session_int_id_str = runtime_state.get_string(session_int_id_key)
-    session_int_id = int(session_int_id_str) if session_int_id_str else 3000000
+    if session_int_id_str:
+        session_int_id = int(session_int_id_str)
+    else:
+        session_int_id = _ensure_session_int_cache(payload.session_id) or 3000000
 
     if payload.event_type == "playback_start":
         repository.insert_playback_event(
@@ -475,7 +488,7 @@ def monitoring_summary(request: Request) -> dict:
 
 @app.api_route("/admin/trigger-retrain", methods=["GET", "POST"])
 def admin_trigger_retrain(request: Request) -> dict:
-    require_authenticated_session(request, repository)
+    _require_admin_or_session(request)
     try:
         dag_run = trigger_airflow_retrain()
         return {
@@ -485,6 +498,24 @@ def admin_trigger_retrain(request: Request) -> dict:
         }
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Airflow trigger failed: {exc}")
+
+
+@app.post("/admin/refresh-serving-bundle")
+def admin_refresh_serving_bundle(request: Request) -> dict:
+    _require_admin_or_session(request)
+    try:
+        staged_path = refresh_serving_bundle()
+        new_bundle = ServingBundle.load(staged_path)
+        with _serving_reload_lock:
+            _reload_serving_bundle(new_bundle)
+        return {
+            "status": "refreshed",
+            "model_version": new_bundle.model_version,
+            "serving_bundle_version": new_bundle.version,
+            "serving_bundle_path": str(new_bundle.bundle_path),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Serving bundle refresh failed: {exc}")
 
 
 # ------------------------------------------------------------------ #
@@ -507,3 +538,33 @@ def _check_model_degraded() -> bool:
     _model_degraded_cache["value"] = degraded
     _model_degraded_cache["expires"] = now + 300  # 5 min TTL
     return degraded
+
+
+def _ensure_session_int_cache(session_id: str) -> Optional[int]:
+    key = f"sess_int:{session_id}"
+    cached = runtime_state.get_string(key)
+    if cached:
+        return int(cached)
+    session_int_id = repository.get_rec_session_int_id(session_id)
+    if session_int_id is not None:
+        runtime_state.set_string(key, str(session_int_id), ttl_seconds=60 * 60 * 24 * 14)
+    return session_int_id
+
+
+def _reload_serving_bundle(new_bundle: ServingBundle) -> None:
+    global serving_bundle
+    serving_bundle = new_bundle
+    recommendation_service.reload_serving_bundle(
+        new_bundle,
+        require_full_ml_pipeline=config.require_full_ml_pipeline,
+    )
+
+
+def _require_admin_or_session(request: Request) -> None:
+    configured_token = config.admin_token
+    if not configured_token:
+        return
+    supplied_token = request.headers.get("x-spotiboys-admin-token", "").strip()
+    if supplied_token and supplied_token == configured_token:
+        return
+    require_authenticated_session(request, repository)

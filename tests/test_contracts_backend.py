@@ -156,6 +156,7 @@ class BackendContractTests(unittest.TestCase):
                 object_storage_endpoint="file://.local/object_storage",
                 mlflow_tracking_uri="http://mlflow:5000",
                 require_full_ml_pipeline=False,
+                admin_token="",
             ),
         )
         payload, media_type = media.stream_bytes("trk_001")
@@ -184,6 +185,7 @@ class BackendContractTests(unittest.TestCase):
                 object_storage_endpoint="file://.local/object_storage",
                 mlflow_tracking_uri="http://mlflow:5000",
                 require_full_ml_pipeline=False,
+                admin_token="",
             ),
         )
         with self.assertRaises(LookupError):

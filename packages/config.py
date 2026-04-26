@@ -28,6 +28,7 @@ class AppConfig:
     object_storage_endpoint: str
     mlflow_tracking_uri: str
     require_full_ml_pipeline: bool
+    admin_token: str
 
 
 def load_config() -> AppConfig:
@@ -58,6 +59,7 @@ def load_config() -> AppConfig:
         object_storage_endpoint=os.environ.get("OBJECT_STORAGE_ENDPOINT", "file://.local/object_storage"),
         mlflow_tracking_uri=os.environ.get("MLFLOW_TRACKING_URI", "http://mlflow:5000"),
         require_full_ml_pipeline=_truthy(os.environ.get("SPOTIBOYS_REQUIRE_FULL_ML_PIPELINE", "true")),
+        admin_token=os.environ.get("SPOTIBOYS_ADMIN_TOKEN", "").strip(),
     )
 
 

@@ -119,7 +119,8 @@ def run_export() -> None:
             last_watermark = int(row[0]) if row else 0
             last_exported_at = row[1] if row else datetime(2000, 1, 1, tzinfo=timezone.utc)
 
-        version = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        export_cutoff = datetime.now(timezone.utc)
+        version = export_cutoff.strftime("%Y%m%d_%H%M%S")
         log.info(f"Export version={version}  watermark={last_watermark}  last_exported_at={last_exported_at}")
 
         # ---- 2. Sync loved_tracks from Navidrome ---- #
@@ -140,7 +141,8 @@ def run_export() -> None:
 
         # ---- 4. Build parquets ---- #
         with conn.cursor() as cur:
-            # session_tracks_addition.parquet
+            # Use the checkpoint timestamp for playback events so long-lived sessions
+            # are not skipped after their session_int_id is watermarked.
             cur.execute(
                 """
                 SELECT session_int_id AS session_id, user_int_id AS user_id,
@@ -151,37 +153,43 @@ def run_export() -> None:
                             ELSE 'skip' END AS label
                 FROM app.playback_events
                 WHERE playratio IS NOT NULL
-                  AND session_int_id > %s
+                  AND created_at > %s
+                  AND created_at <= %s
+                ORDER BY created_at, event_id
                 """,
-                (last_watermark,),
+                (last_exported_at, export_cutoff),
             )
-            session_tracks_rows = cur.fetchall()
+            playback_rows = cur.fetchall()
             session_tracks_df = pd.DataFrame(
-                session_tracks_rows,
+                playback_rows,
                 columns=["session_id", "user_id", "position", "track_id", "playratio", "label"],
             )
 
-            # session_meta_addition.parquet
-            cur.execute(
-                """
-                SELECT DISTINCT session_int_id AS session_id, user_int_id AS user_id
-                FROM app.playback_events WHERE session_int_id > %s
-                """,
-                (last_watermark,),
+            session_meta_df = (
+                session_tracks_df[["session_id", "user_id"]].drop_duplicates().reset_index(drop=True)
+                if not session_tracks_df.empty
+                else pd.DataFrame(columns=["session_id", "user_id"])
             )
-            session_meta_df = pd.DataFrame(cur.fetchall(), columns=["session_id", "user_id"])
 
             # love_addition.parquet
             cur.execute(
-                "SELECT user_int_id AS user_id, track_id FROM app.loved_tracks WHERE loved_at > %s",
-                (last_exported_at,),
+                """
+                SELECT user_int_id AS user_id, track_id
+                FROM app.loved_tracks
+                WHERE loved_at > %s AND loved_at <= %s
+                """,
+                (last_exported_at, export_cutoff),
             )
             love_df = pd.DataFrame(cur.fetchall(), columns=["user_id", "track_id"])
 
             # users_addition.parquet (online users only, not pre-seeded 30Music)
             cur.execute(
-                "SELECT user_int_id AS user_id FROM app.users WHERE created_at > %s AND user_int_id >= 100000",
-                (last_exported_at,),
+                """
+                SELECT user_int_id AS user_id
+                FROM app.users
+                WHERE created_at > %s AND created_at <= %s AND user_int_id >= 100000
+                """,
+                (last_exported_at, export_cutoff),
             )
             users_df = pd.DataFrame(cur.fetchall(), columns=["user_id"])
 
@@ -191,9 +199,9 @@ def run_export() -> None:
                 SELECT p.playlist_int_id AS playlist_id, pt.position, pt.track_id
                 FROM app.playlist_tracks pt
                 JOIN app.user_playlists p USING (playlist_int_id)
-                WHERE p.synced_at > %s
+                WHERE p.synced_at > %s AND p.synced_at <= %s
                 """,
-                (last_exported_at,),
+                (last_exported_at, export_cutoff),
             )
             playlist_tracks_df = pd.DataFrame(cur.fetchall(), columns=["playlist_id", "position", "track_id"])
 
@@ -226,8 +234,12 @@ def run_export() -> None:
         with conn.cursor() as cur:
             import json
             cur.execute(
-                "INSERT INTO app.delta_checkpoint (version, session_int_id_watermark, rows_exported) VALUES (%s, %s, %s)",
-                (version, new_watermark, json.dumps(rows_exported)),
+                """
+                INSERT INTO app.delta_checkpoint
+                    (version, exported_at, session_int_id_watermark, rows_exported)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (version, export_cutoff, new_watermark, json.dumps(rows_exported)),
             )
         conn.commit()
 
