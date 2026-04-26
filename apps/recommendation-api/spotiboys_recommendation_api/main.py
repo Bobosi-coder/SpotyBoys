@@ -175,6 +175,33 @@ def _make_auth_response(token: str, user_id: str, display_name: str, user_int_id
     return {"token": token, "user_id": user_id, "user_int_id": user_int_id, "display_name": display_name or ""}
 
 
+def _clear_recommendation_session(user_id: str) -> None:
+    stable_key = f"user_session:{user_id}"
+    session_id = runtime_state.get_string(stable_key)
+    keys = [stable_key]
+    if session_id:
+        keys.extend(
+            [
+                f"sess:{session_id}:queue",
+                f"sess:{session_id}:recent_tracks",
+                f"sess:{session_id}:recommended_tracks",
+                f"sess_int:{session_id}",
+            ]
+        )
+    runtime_state.delete_keys(*keys)
+
+
+def _revoke_request_session(request: Request) -> None:
+    token = request.cookies.get("spotiboys_token") or \
+            request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+    if not token:
+        return
+    session = repository.get_auth_session(hash_session_token(token))
+    if session:
+        _clear_recommendation_session(session.user_id)
+    repository.revoke_auth_session(hash_session_token(token))
+
+
 @app.get("/login")
 def login_page() -> Response:
     return Response(content=_LOGIN_HTML, media_type="text/html")
@@ -183,10 +210,7 @@ def login_page() -> Response:
 @app.get("/logout")
 def logout_page(request: Request) -> Response:
     """Browser logout: revoke the current session, clear browser state, redirect to /login."""
-    token = request.cookies.get("spotiboys_token") or \
-            request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-    if token:
-        repository.revoke_auth_session(hash_session_token(token))
+    _revoke_request_session(request)
     logout_response = Response(content=_LOGOUT_HTML, media_type="text/html")
     logout_response.delete_cookie("spotiboys_token", path="/")
     return logout_response
@@ -215,6 +239,7 @@ def signup(payload: SignupRequest, response: Response) -> dict:
         raise HTTPException(status_code=409, detail="email already registered")
     user_id = new_user_id()
     user = repository.create_user(user_id, payload.email, hash_password(payload.password), payload.display_name)
+    _clear_recommendation_session(user_id)
     token = new_session_token()
     expires_at = session_expires_at()
     repository.create_auth_session(
@@ -231,6 +256,7 @@ def login(payload: LoginRequest, response: Response) -> dict:
     user = repository.get_user_by_email(payload.email)
     if not user or not user.get("password_hash") or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="invalid email or password")
+    _clear_recommendation_session(user["user_id"])
     token = new_session_token()
     expires_at = session_expires_at()
     repository.create_auth_session(
@@ -244,10 +270,7 @@ def login(payload: LoginRequest, response: Response) -> dict:
 
 @app.post("/spotiboys/auth/logout", response_model=LogoutResponse)
 def logout(request: Request, response: Response) -> LogoutResponse:
-    token = request.cookies.get("spotiboys_token") or \
-            request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-    if token:
-        repository.revoke_auth_session(hash_session_token(token))
+    _revoke_request_session(request)
     response.delete_cookie("spotiboys_token", path="/")
     return LogoutResponse()
 

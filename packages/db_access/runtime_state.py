@@ -70,6 +70,19 @@ class InMemoryRuntimeState:
     def set_string(self, key: str, value: str, ttl_seconds: Optional[int] = None) -> None:
         self._strings[key] = value
 
+    def delete_keys(self, *keys: str) -> None:
+        for key in keys:
+            self._strings.pop(key, None)
+            if key.startswith("sess:") and key.endswith(":queue"):
+                session_id = key[len("sess:") : -len(":queue")]
+                self._queues.pop(session_id, None)
+            elif key.startswith("sess:") and key.endswith(":recent_tracks"):
+                session_id = key[len("sess:") : -len(":recent_tracks")]
+                self._recent_tracks.pop(session_id, None)
+            elif key.startswith("sess:") and key.endswith(":recommended_tracks"):
+                session_id = key[len("sess:") : -len(":recommended_tracks")]
+                self._recommended_tracks.pop(session_id, None)
+
 
 class RedisRuntimeState:
     """Redis-backed runtime queue and event dedupe state."""
@@ -147,6 +160,10 @@ class RedisRuntimeState:
             self.client.set(key, value, ex=ttl_seconds)
         else:
             self.client.set(key, value)
+
+    def delete_keys(self, *keys: str) -> None:
+        if keys:
+            self.client.delete(*keys)
 
     @staticmethod
     def _queue_key(session_id: str) -> str:
