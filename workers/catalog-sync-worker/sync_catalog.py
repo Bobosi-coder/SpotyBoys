@@ -56,11 +56,17 @@ def sync_catalog() -> int:
     if config.media_mode in {"navidrome_fixture", "navidrome_vm_library", "navidrome"}:
         print("pre-fetching all Navidrome songs in bulk ...", flush=True)
         navidrome_map = _fetch_all_navidrome_songs(config)
+    refresh_metadata = os.environ.get("SPOTIBOYS_REFRESH_CATALOG_METADATA", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     for index, row in enumerate(rows, start=1):
         track_id = str(row["track_id"])
 
-        if hasattr(repository, "upsert_playable_track"):
+        if hasattr(repository, "upsert_playable_track") and (refresh_metadata or track_id not in already_mapped):
             repository.upsert_playable_track(
                 PlayableTrackRecord(
                     track_id=track_id,
