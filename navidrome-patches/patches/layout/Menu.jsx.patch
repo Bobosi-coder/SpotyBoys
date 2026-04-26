@@ -1,14 +1,70 @@
 --- a/ui/src/layout/Menu.jsx
 +++ b/ui/src/layout/Menu.jsx
-@@ -10,6 +10,7 @@
- import albumLists from '../album/albumLists'
+@@ -4,12 +4,11 @@
+ import clsx from 'clsx'
+ import { useTranslate, MenuItemLink, getResources } from 'react-admin'
+ import ViewListIcon from '@material-ui/icons/ViewList'
+-import AlbumIcon from '@material-ui/icons/Album'
+-import SubMenu from './SubMenu'
+ import { humanize, pluralize } from 'inflection'
+-import albumLists from '../album/albumLists'
  import PlaylistsSubMenu from './PlaylistsSubMenu'
  import LibrarySelector from '../common/LibrarySelector'
 +import RecommendIcon from '@material-ui/icons/Queue'
++import FavoriteBorderIcon from '@material-ui/icons/FavoriteBorder'
  import config from '../config'
  
  const useStyles = makeStyles((theme) => ({
-@@ -113,19 +114,9 @@
+@@ -55,15 +54,10 @@
+ 
+   // TODO State is not persisted in mobile when you close the sidebar menu. Move to redux?
+   const [state, setState] = useState({
+-    menuAlbumList: true,
+     menuPlaylists: true,
+     menuSharedPlaylists: true,
+   })
+ 
+-  const handleToggle = (menu) => {
+-    setState((state) => ({ ...state, [menu]: !state[menu] }))
+-  }
+-
+   const renderResourceMenuItemLink = (resource) => (
+     <MenuItemLink
+       key={resource.name}
+@@ -76,32 +70,6 @@
+     />
+   )
+ 
+-  const renderAlbumMenuItemLink = (type, al) => {
+-    const resource = resources.find((r) => r.name === 'album')
+-    if (!resource) {
+-      return null
+-    }
+-
+-    const albumListAddress = `/album/${type}`
+-
+-    const name = translate(`resources.album.lists.${type || 'default'}`, {
+-      _: translatedResourceName(resource, translate),
+-    })
+-
+-    return (
+-      <MenuItemLink
+-        key={albumListAddress}
+-        to={albumListAddress}
+-        activeClassName={classes.active}
+-        primaryText={name}
+-        leftIcon={al.icon || <ViewListIcon />}
+-        sidebarIsOpen={open}
+-        dense={dense}
+-        exact
+-      />
+-    )
+-  }
+-
+   const subItems = (subMenu) => (resource) =>
+     resource.hasList && resource.options && resource.options.subMenu === subMenu
+ 
+@@ -113,19 +81,9 @@
        })}
      >
        {open && <LibrarySelector />}
@@ -31,13 +87,18 @@
        {config.devSidebarPlaylists && open ? (
          <>
            <Divider />
-@@ -137,8 +128,16 @@
-           />
-         </>
+@@ -139,6 +97,22 @@
        ) : (
--        resources.filter(subItems('playlist')).map(renderResourceMenuItemLink)
-+        []
+         resources.filter(subItems('playlist')).map(renderResourceMenuItemLink)
        )}
++      <MenuItemLink
++        to={'/song?filter={"starred":true}&order=DESC&sort=starred_at'}
++        activeClassName={classes.active}
++        primaryText="Liked Songs"
++        leftIcon={<FavoriteBorderIcon />}
++        sidebarIsOpen={open}
++        dense={dense}
++      />
 +      <MenuItemLink
 +        to="/recommendations"
 +        activeClassName={classes.active}
