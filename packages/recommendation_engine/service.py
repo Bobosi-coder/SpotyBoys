@@ -111,6 +111,7 @@ class RecommendationService:
         queue_items = [
             QueueItem(
                 track_id=track.track_id,
+                navidrome_track_id=track.navidrome_track_id,
                 title=track.title,
                 artist=track.artist,
                 album=track.album,
@@ -128,6 +129,7 @@ class RecommendationService:
     def _to_track_item(track: PlayableTrackRecord, slot: BrowseSurfaceSlot) -> TrackItem:
         return TrackItem(
             track_id=track.track_id,
+            navidrome_track_id=track.navidrome_track_id,
             title=track.title,
             artist=track.artist,
             album=track.album,

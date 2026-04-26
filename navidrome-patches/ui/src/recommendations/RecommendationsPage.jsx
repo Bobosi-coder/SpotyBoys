@@ -129,17 +129,17 @@ const useStyles = makeStyles((theme) => ({
 
 /** Convert a SpotyBoys QueueItem into the shape Navidrome's player expects. */
 function toNavidromeTrack(track, sessionId) {
+  const navidromeId = track.navidrome_track_id || track.track_id
   return {
-    id: track.track_id,
+    id: navidromeId,
     title: track.title || track.track_id,
     artist: track.artist || 'Unknown Artist',
     album: track.album || '',
     duration: track.duration_sec || 30,
-    musicSrc: `/stream/${track.track_id}`,
-    cover: `/covers/${track.track_id}`,
     // Metadata read by SpotiboysEventBridge for event capture
     _spotiboys: {
       track_id: track.track_id,
+      navidrome_track_id: navidromeId,
       session_id: sessionId,
       position: (track.queue_position || 1) - 1,  // convert 1-based to 0-based
       duration_sec: track.duration_sec || 30,
@@ -230,12 +230,14 @@ export default function RecommendationsPage() {
 
       const data = {}
       allTracks.forEach((t) => {
-        data[t.track_id] = toNavidromeTrack(t, sessionId)
+        const navidromeId = t.navidrome_track_id || t.track_id
+        data[navidromeId] = toNavidromeTrack(t, sessionId)
       })
 
+      const startNavidromeId = startTrack.navidrome_track_id || startTrack.track_id
       dispatch({
         type: PLAYER_PLAY_TRACKS,
-        id: startTrack.track_id,
+        id: startNavidromeId,
         data,
       })
     },

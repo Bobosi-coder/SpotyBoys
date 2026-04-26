@@ -35,6 +35,7 @@ services:
     environment:
       ND_SCANSCHEDULE: "1m"
       ND_LOGLEVEL: info
+      ND_MUSICFOLDER: /music
       ND_EXTAUTH_TRUSTEDSOURCES: "0.0.0.0/0"
       ND_EXTAUTH_USERHEADER: "Remote-User"
       ND_ENABLEUSEREDITING: "false"

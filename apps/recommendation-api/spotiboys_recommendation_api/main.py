@@ -336,6 +336,7 @@ def recommendations_next(payload: RecommendationRequest, request: Request) -> di
 def _queue_item_dict(item) -> dict:
     return {
         "track_id": item.track_id,
+        "navidrome_track_id": getattr(item, "navidrome_track_id", None),
         "title": item.title,
         "artist": item.artist,
         "album": getattr(item, "album", ""),

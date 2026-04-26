@@ -18,6 +18,7 @@ def utc_now() -> datetime:
 
 class TrackItem(BaseModel):
     track_id: str
+    navidrome_track_id: Optional[str] = None
     title: str
     artist: str
     album: str = ""
@@ -28,6 +29,7 @@ class TrackItem(BaseModel):
 
 class QueueItem(BaseModel):
     track_id: str
+    navidrome_track_id: Optional[str] = None
     title: str
     artist: str
     album: str = ""
