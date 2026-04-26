@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import os
 import sqlite3
 import time
@@ -117,6 +118,11 @@ def _quote_identifier(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
+def _artist_id(name: str) -> str:
+    normalized = " ".join((name or "Unknown Artist").strip().lower().split())
+    return "spb-artist-" + hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:24]
+
+
 def _wait_for_scan_rows(
     db_path: Path,
     *,
@@ -166,18 +172,20 @@ def _load_temp_metadata(conn: sqlite3.Connection, rows: list[dict[str, str]]) ->
             filename TEXT NOT NULL,
             title TEXT NOT NULL,
             artist TEXT NOT NULL,
+            artist_id TEXT NOT NULL,
             album TEXT NOT NULL
         )
         """
     )
     conn.executemany(
         """
-        INSERT INTO spotiboys_metadata (track_id, filename, title, artist, album)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO spotiboys_metadata (track_id, filename, title, artist, artist_id, album)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(track_id) DO UPDATE SET
             filename = excluded.filename,
             title = excluded.title,
             artist = excluded.artist,
+            artist_id = excluded.artist_id,
             album = excluded.album
         """,
         [
@@ -186,12 +194,14 @@ def _load_temp_metadata(conn: sqlite3.Connection, rows: list[dict[str, str]]) ->
                 f"{row['track_id']}.mp3",
                 row["title"],
                 row["artist"],
+                _artist_id(row["artist"]),
                 row["album"],
             )
             for row in rows
         ],
     )
     conn.execute("CREATE INDEX temp.idx_spotiboys_metadata_filename ON spotiboys_metadata(filename)")
+    conn.execute("CREATE INDEX temp.idx_spotiboys_metadata_artist_id ON spotiboys_metadata(artist_id)")
 
 
 def _bulk_update_metadata(conn: sqlite3.Connection, table: str, columns: set[str]) -> int:
@@ -225,6 +235,97 @@ def _bulk_update_metadata(conn: sqlite3.Connection, table: str, columns: set[str
         cur = conn.execute(sql)
         total_updated += cur.rowcount if cur.rowcount > 0 else 0
     return total_updated
+
+
+def _sync_artists(conn: sqlite3.Connection, media_table: str) -> int:
+    tables = _existing_tables(conn)
+    required = {"artist", "media_file_artists", "library_artist"}
+    if not required.issubset(tables):
+        print("warning: Navidrome artist relationship tables not found; skipping artist sync", flush=True)
+        return 0
+
+    quoted_media = _quote_identifier(media_table)
+    print("upserting Navidrome artist rows", flush=True)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO artist (
+            id, name, full_text, order_artist_name, sort_artist_name, search_normalized, missing
+        )
+        SELECT
+            artist_id,
+            artist,
+            artist,
+            lower(artist),
+            artist,
+            artist,
+            false
+        FROM (
+            SELECT artist_id, MIN(artist) AS artist
+            FROM spotiboys_metadata
+            WHERE artist <> ''
+            GROUP BY artist_id
+        )
+        """
+    )
+    conn.execute(
+        """
+        UPDATE artist
+        SET name = src.artist,
+            full_text = src.artist,
+            order_artist_name = lower(src.artist),
+            sort_artist_name = src.artist,
+            search_normalized = src.artist,
+            missing = false,
+            updated_at = current_time
+        FROM (
+            SELECT artist_id, MIN(artist) AS artist
+            FROM spotiboys_metadata
+            WHERE artist <> ''
+            GROUP BY artist_id
+        ) src
+        WHERE artist.id = src.artist_id
+        """
+    )
+
+    print("rewiring Navidrome media_file_artists rows", flush=True)
+    conn.execute(
+        f"""
+        DELETE FROM media_file_artists
+        WHERE role IN ('artist', 'albumartist')
+          AND media_file_id IN (
+            SELECT mf.id
+            FROM {quoted_media} mf
+            JOIN spotiboys_metadata m
+              ON m.filename = mf.path OR m.track_id = mf.title
+          )
+        """
+    )
+    conn.execute(
+        f"""
+        INSERT OR IGNORE INTO media_file_artists (media_file_id, artist_id, role, sub_role)
+        SELECT mf.id, m.artist_id, roles.role, ''
+        FROM {quoted_media} mf
+        JOIN spotiboys_metadata m
+          ON m.filename = mf.path OR m.track_id = mf.title
+        JOIN (
+            SELECT 'artist' AS role
+            UNION ALL
+            SELECT 'albumartist' AS role
+        ) roles
+        """
+    )
+    relation_rows = int(conn.execute("SELECT changes()").fetchone()[0] or 0)
+
+    print("upserting Navidrome library_artist rows", flush=True)
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO library_artist (library_id, artist_id, stats)
+        SELECT DISTINCT 1, artist_id, '{}'
+        FROM spotiboys_metadata
+        WHERE artist_id <> ''
+        """
+    )
+    return relation_rows
 
 
 def sync_metadata(
@@ -262,11 +363,13 @@ def sync_metadata(
                 continue
             print(f"updating Navidrome metadata table={table}", flush=True)
             updated = _bulk_update_metadata(conn, table, columns)
+            artist_relations = _sync_artists(conn, table)
             conn.commit()
             if updated == 0:
                 raise RuntimeError(
                     f"found Navidrome media table {table} but no metadata rows matched manifest track ids"
                 )
+            print(f"Navidrome artist relationship rows updated: {artist_relations}", flush=True)
             return updated
     finally:
         conn.close()
