@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import json
 import os
 import sqlite3
 import time
@@ -123,6 +124,17 @@ def _artist_id(name: str) -> str:
     return "spb-artist-" + hashlib.sha1(normalized.encode("utf-8")).hexdigest()[:24]
 
 
+def _participants_json(artist_id: str, artist: str) -> str:
+    participant = {"id": artist_id, "name": artist, "subRole": ""}
+    return json.dumps(
+        {
+            "artist": [participant],
+            "albumartist": [participant],
+        },
+        separators=(",", ":"),
+    )
+
+
 def _wait_for_scan_rows(
     db_path: Path,
     *,
@@ -173,19 +185,21 @@ def _load_temp_metadata(conn: sqlite3.Connection, rows: list[dict[str, str]]) ->
             title TEXT NOT NULL,
             artist TEXT NOT NULL,
             artist_id TEXT NOT NULL,
+            participants TEXT NOT NULL,
             album TEXT NOT NULL
         )
         """
     )
     conn.executemany(
         """
-        INSERT INTO spotiboys_metadata (track_id, filename, title, artist, artist_id, album)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO spotiboys_metadata (track_id, filename, title, artist, artist_id, participants, album)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(track_id) DO UPDATE SET
             filename = excluded.filename,
             title = excluded.title,
             artist = excluded.artist,
             artist_id = excluded.artist_id,
+            participants = excluded.participants,
             album = excluded.album
         """,
         [
@@ -195,6 +209,7 @@ def _load_temp_metadata(conn: sqlite3.Connection, rows: list[dict[str, str]]) ->
                 row["title"],
                 row["artist"],
                 _artist_id(row["artist"]),
+                _participants_json(_artist_id(row["artist"]), row["artist"]),
                 row["album"],
             )
             for row in rows
@@ -205,8 +220,24 @@ def _load_temp_metadata(conn: sqlite3.Connection, rows: list[dict[str, str]]) ->
 
 
 def _bulk_update_metadata(conn: sqlite3.Connection, table: str, columns: set[str]) -> int:
-    set_columns = [name for name in ("title", "artist", "album") if name in columns]
-    if not set_columns:
+    column_sources = {
+        "title": "title",
+        "artist": "artist",
+        "artist_id": "artist_id",
+        "album": "album",
+        "album_artist": "artist",
+        "album_artist_id": "artist_id",
+        "order_artist_name": "lower(artist)",
+        "order_album_artist_name": "lower(artist)",
+        "sort_artist_name": "artist",
+        "sort_album_artist_name": "artist",
+        "participants": "participants",
+        "search_participants": "artist",
+        "search_normalized": "title || ' ' || album || ' ' || artist || ' ' || artist",
+        "full_text": "title || ' ' || album || ' ' || artist || ' ' || artist",
+    }
+    update_columns = [name for name in column_sources if name in columns]
+    if not update_columns:
         return 0
     quoted_table = _quote_identifier(table)
 
@@ -218,10 +249,10 @@ def _bulk_update_metadata(conn: sqlite3.Connection, table: str, columns: set[str
     for _name, matcher in matchers:
         assignments = ", ".join(
             f"{_quote_identifier(column)} = ("
-            f"SELECT m.{_quote_identifier(column)} FROM spotiboys_metadata m "
+            f"SELECT {column_sources[column]} FROM spotiboys_metadata m "
             f"WHERE {matcher.format(table=quoted_table)} LIMIT 1"
             f")"
-            for column in set_columns
+            for column in update_columns
         )
         sql = f"""
             UPDATE {quoted_table}
