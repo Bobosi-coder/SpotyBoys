@@ -83,6 +83,15 @@ class DemoRepository:
             return None
         return track
 
+    def get_playable_track_by_navidrome_id(self, navidrome_track_id: str) -> Optional[PlayableTrackRecord]:
+        for track in self._tracks.values():
+            if str(track.navidrome_track_id or "") != str(navidrome_track_id):
+                continue
+            if not track.is_playable or track.availability_status != "available" or track.quarantine_reason:
+                return None
+            return track
+        return None
+
     def persist_recommendation_impression(self, impression_id: str, payload: Dict[str, Any]) -> bool:
         if impression_id in self.recommendation_impressions:
             return False

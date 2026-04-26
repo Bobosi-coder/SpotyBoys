@@ -191,6 +191,25 @@ def _clear_recommendation_session(user_id: str) -> None:
     runtime_state.delete_keys(*keys)
 
 
+def _ensure_recommendation_session(user_id: str, user_int_id: int) -> tuple[str, int]:
+    stable_key = f"user_session:{user_id}"
+    session_id = runtime_state.get_string(stable_key)
+    if session_id:
+        session_int_id = _ensure_session_int_cache(session_id)
+        if session_int_id is not None:
+            return session_id, session_int_id
+
+    session_id = new_session_id()
+    session_int_id = repository.create_rec_session(session_id, user_int_id)
+    runtime_state.set_string(
+        f"sess_int:{session_id}",
+        str(session_int_id),
+        ttl_seconds=60 * 60 * 24 * 14,
+    )
+    runtime_state.set_string(stable_key, session_id, ttl_seconds=60 * 60 * 24 * 14)
+    return session_id, session_int_id
+
+
 def _revoke_request_session(request: Request) -> None:
     token = request.cookies.get("spotiboys_token") or \
             request.headers.get("authorization", "").removeprefix("Bearer ").strip()
@@ -291,35 +310,17 @@ def bootstrap(request: Request) -> dict:
     user = repository.get_user_by_id(auth_session.user_id)
     user_int_id: int = user["user_int_id"] if user else 0
 
-    # Check if we already have a live queue for this user in Redis
-    # (keyed by a stable user-scoped session key so page refresh reuses it)
-    stable_key = f"user_session:{auth_session.user_id}"
-    existing_session_id = runtime_state.get_string(stable_key)
+    # Reuse an active user-scoped recommendation session. Native Navidrome
+    # playback may create this session before the recommendations page is opened.
+    session_id, _session_int_id = _ensure_recommendation_session(auth_session.user_id, user_int_id)
+    queue = runtime_state.get_queue(session_id)
 
-    if existing_session_id:
-        session_id = existing_session_id
-        queue = runtime_state.get_queue(session_id)
-    else:
-        session_id = None
-        queue = None
-
-    if not session_id or not queue or not queue.items:
-        session_id = new_session_id()
-        session_int_id = repository.create_rec_session(session_id, user_int_id)
-        runtime_state.set_string(
-            f"sess_int:{session_id}",
-            str(session_int_id),
-            ttl_seconds=60 * 60 * 24 * 14,
-        )
-        runtime_state.set_string(stable_key, session_id, ttl_seconds=60 * 60 * 24 * 14)
-
+    if not queue or not queue.items:
         _, queue_items = recommendation_service.build_bootstrap_surfaces(
             session_id,
             auth_session.user_id,
         )
         queue = runtime_state.set_queue(session_id, queue_items)
-    else:
-        _ensure_session_int_cache(session_id)
 
     # Check model degraded flag (Redis-cached)
     model_degraded = _check_model_degraded()
@@ -400,6 +401,15 @@ class PlaybackEventBody(BaseModel):
     position_ms: Optional[int] = None   # informational
 
 
+class NavidromePlaybackEventBody(BaseModel):
+    playback_id: str
+    event_type: str
+    navidrome_track_id: str
+    position: int = Field(0, ge=0)
+    playratio: Optional[float] = None
+    position_ms: Optional[int] = None
+
+
 @app.post("/events/playback")
 def playback_event(payload: PlaybackEventBody, request: Request) -> dict:
     auth_session = require_authenticated_session(request, repository)
@@ -438,6 +448,45 @@ def playback_event(payload: PlaybackEventBody, request: Request) -> dict:
 
     runtime_state.set_string(idem_key, "1", ttl_seconds=86400)
     return {"status": "ok", "event_type": payload.event_type}
+
+
+@app.post("/events/navidrome-playback")
+def navidrome_playback_event(payload: NavidromePlaybackEventBody, request: Request) -> dict:
+    auth_session = require_authenticated_session(request, repository)
+
+    idem_key = f"idem:navidrome-playback:{payload.playback_id}:{payload.event_type}"
+    if runtime_state.get_string(idem_key):
+        return {"status": "duplicate"}
+
+    track = repository.get_playable_track_by_navidrome_id(payload.navidrome_track_id)
+    if not track:
+        raise HTTPException(status_code=404, detail="navidrome track is not mapped to a playable SpotyBoys track")
+
+    user = repository.get_user_by_id(auth_session.user_id)
+    user_int_id: int = user["user_int_id"] if user else 0
+    session_id, session_int_id = _ensure_recommendation_session(auth_session.user_id, user_int_id)
+
+    if payload.event_type == "playback_start":
+        repository.insert_playback_event(
+            event_id=payload.playback_id,
+            session_int_id=session_int_id,
+            user_int_id=user_int_id,
+            track_id=track.track_id,
+            position=payload.position,
+            event_type="playback_start",
+        )
+        runtime_state.append_recent_track(session_id, track.track_id)
+    else:
+        playratio = payload.playratio if payload.playratio is not None else 0.0
+        repository.update_playback_event(payload.playback_id, payload.event_type, playratio)
+
+    runtime_state.set_string(idem_key, "1", ttl_seconds=86400)
+    return {
+        "status": "ok",
+        "event_type": payload.event_type,
+        "session_id": session_id,
+        "track_id": track.track_id,
+    }
 
 
 # ------------------------------------------------------------------ #

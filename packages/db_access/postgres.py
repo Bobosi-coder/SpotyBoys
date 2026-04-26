@@ -65,6 +65,25 @@ class PostgresRepository:
             return None
         return track
 
+    def get_playable_track_by_navidrome_id(self, navidrome_track_id: str) -> Optional[PlayableTrackRecord]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT track_id, title, artist, COALESCE(album, ''), duration_sec,
+                           COALESCE(cover_art_url, ''), is_playable, navidrome_track_id,
+                           availability_status, quarantine_reason
+                    FROM app.playable_tracks
+                    WHERE navidrome_track_id = %s
+                      AND is_playable = TRUE
+                      AND availability_status = 'available'
+                      AND quarantine_reason IS NULL
+                    """,
+                    (str(navidrome_track_id),),
+                )
+                row = cur.fetchone()
+                return self._track_from_row(row) if row else None
+
     def get_mapped_track_ids(self) -> set:
         with self._connect() as conn:
             with conn.cursor() as cur:
