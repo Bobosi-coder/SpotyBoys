@@ -13,18 +13,18 @@
     {
       "id": 1,
       "type": "text",
-      "title": "① Loved Tracks (Navidrome Stars)",
+      "title": "① Ingestion Quality Gate",
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 2 },
       "options": {
         "mode": "markdown",
-        "content": "User stars synced from Navidrome via `getStarred2` by the delta-export-worker into `app.loved_tracks`. Timestamps reflect sync time (runs every 24 h)."
+        "content": "## ① Ingestion Quality Gate\nTracks from Navidrome (external source) that could not be mapped to the 30Music catalog during delta-export-worker sync. Logged per sync cycle (every 24 h)."
       }
     },
 
     {
       "id": 2,
       "type": "stat",
-      "title": "Loved Tracks (since last sync)",
+      "title": "Total Rejections (24 h)",
       "gridPos": { "x": 0, "y": 3, "w": 6, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "options": {
@@ -38,7 +38,11 @@
         "defaults": {
           "thresholds": {
             "mode": "absolute",
-            "steps": [{ "color": "blue", "value": null }]
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
           },
           "color": { "mode": "thresholds" }
         }
@@ -46,7 +50,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT COUNT(*) AS value FROM app.loved_tracks WHERE loved_at >= NOW() - INTERVAL '24 hours'",
+          "rawSql": "SELECT COUNT(*) AS value FROM app.ingestion_rejections WHERE created_at >= NOW() - INTERVAL '24 hours'",
           "format": "table",
           "refId": "A"
         }
@@ -55,30 +59,15 @@
 
     {
       "id": 3,
-      "type": "stat",
-      "title": "Total Loved Tracks (All Time)",
+      "type": "piechart",
+      "title": "Rejections by Source",
       "gridPos": { "x": 6, "y": 3, "w": 6, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-      "options": {
-        "reduceOptions": { "calcs": ["lastNotNull"] },
-        "orientation": "auto",
-        "colorMode": "background",
-        "graphMode": "none",
-        "textMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [{ "color": "blue", "value": null }]
-          },
-          "color": { "mode": "thresholds" }
-        }
-      },
+      "options": { "pieType": "pie", "legendDisplayMode": "table" },
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT COUNT(*) AS value FROM app.loved_tracks",
+          "rawSql": "SELECT source AS metric, COUNT(*) AS value FROM app.ingestion_rejections WHERE created_at >= NOW() - INTERVAL '24 hours' GROUP BY source",
           "format": "table",
           "refId": "A"
         }
@@ -88,7 +77,7 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Love Activity Over Time",
+      "title": "Rejection Count Over Time",
       "gridPos": { "x": 12, "y": 3, "w": 12, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "fieldConfig": {
@@ -101,7 +90,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT date_trunc('hour', loved_at) AS time, COUNT(*) AS loves FROM app.loved_tracks WHERE $__timeFilter(loved_at) GROUP BY 1 ORDER BY 1",
+          "rawSql": "SELECT date_trunc('hour', created_at) AS time, source, COUNT(*) AS rejections FROM app.ingestion_rejections WHERE $__timeFilter(created_at) GROUP BY 1, 2 ORDER BY 1",
           "format": "table",
           "refId": "A"
         }
