@@ -122,6 +122,7 @@ services:
       S3_NO_VERIFY_SSL: ${S3_NO_VERIFY_SSL:-true}
       ARTIFACT_BUCKET: ${ARTIFACT_BUCKET:-proj23-mlflow-artifacts}
       SPOTIBOYS_ACTIVE_ARTIFACT_ROOT: /serving-bundle
+      SPOTIBOYS_ALLOW_UNAPPROVED_REFRESH: ${SPOTIBOYS_ALLOW_UNAPPROVED_REFRESH:-false}
     volumes:
       - /mnt/mlflow_persist/spotiboys_v2/serving-bundle:/serving-bundle
 
@@ -149,6 +150,7 @@ services:
       AWS_ENDPOINT_URL: ${AWS_ENDPOINT_URL:-https://chi.tacc.chameleoncloud.org:7480}
       S3_NO_VERIFY_SSL: ${S3_NO_VERIFY_SSL:-true}
       ARTIFACT_BUCKET: ${ARTIFACT_BUCKET:-proj23-mlflow-artifacts}
+      SPOTIBOYS_ALLOW_UNAPPROVED_REFRESH: ${SPOTIBOYS_ALLOW_UNAPPROVED_REFRESH:-false}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
