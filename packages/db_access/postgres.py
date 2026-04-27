@@ -628,7 +628,29 @@ class PostgresRepository:
         return []
 
     def persist_recommendation_impression(self, impression_id: str, payload: Dict[str, Any]) -> bool:
-        return True
+        import json
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.recommendation_impressions
+                        (impression_id, request_id, session_id, user_id, model_version,
+                         fallback_level, browse_surface_json, queue_json)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                    ON CONFLICT (impression_id) DO NOTHING
+                    """,
+                    (
+                        impression_id,
+                        payload.get("request_id", ""),
+                        payload.get("session_id", ""),
+                        payload.get("user_id", ""),
+                        payload.get("model_version", "unknown"),
+                        payload.get("fallback_level", "none"),
+                        json.dumps(payload.get("browse_surface", {})),
+                        json.dumps(payload.get("queue", {})),
+                    ),
+                )
+                return cur.rowcount == 1
 
     def persist_rendered_impression(self, impression_id: str, payload: Dict[str, Any]) -> bool:
         return True
@@ -637,10 +659,38 @@ class PostgresRepository:
         return True
 
     def persist_feedback_event(self, event_id: str, payload: Dict[str, Any]) -> bool:
-        return True
+        import json
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.feedback_events
+                        (event_id, feedback_type, session_id, user_id, track_id, impression_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (event_id) DO NOTHING
+                    """,
+                    (
+                        event_id,
+                        payload.get("feedback_type", ""),
+                        payload.get("session_id", ""),
+                        payload.get("user_id", ""),
+                        payload.get("track_id", ""),
+                        payload.get("impression_id"),
+                    ),
+                )
+                return cur.rowcount == 1
 
     def persist_ingestion_rejection(self, event_type: str, reasons: List[str], raw_payload: Dict[str, Any]) -> None:
-        pass
+        import json
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.ingestion_rejections (event_type, reasons, raw_payload)
+                    VALUES (%s, %s, %s::jsonb)
+                    """,
+                    (event_type, reasons, json.dumps(raw_payload)),
+                )
 
     def record_serving_request_metric(self, payload: Dict[str, Any]) -> None:
         pass

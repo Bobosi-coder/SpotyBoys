@@ -410,9 +410,27 @@ class NavidromePlaybackEventBody(BaseModel):
     position_ms: Optional[int] = None
 
 
+_VALID_PLAYBACK_EVENT_TYPES = {"playback_start", "skip", "complete"}
+
+
+def _validate_playback(payload_dict: dict, event_type_key: str) -> list[str]:
+    reasons = []
+    if payload_dict.get(event_type_key) not in _VALID_PLAYBACK_EVENT_TYPES:
+        reasons.append(f"event_type must be one of {sorted(_VALID_PLAYBACK_EVENT_TYPES)}")
+    playratio = payload_dict.get("playratio")
+    if playratio is not None and not (0.0 <= float(playratio) <= 1.0):
+        reasons.append(f"playratio={playratio} is out of range [0.0, 1.0]")
+    return reasons
+
+
 @app.post("/events/playback")
 def playback_event(payload: PlaybackEventBody, request: Request) -> dict:
     auth_session = require_authenticated_session(request, repository)
+
+    reasons = _validate_playback(payload.dict(), "event_type")
+    if reasons:
+        repository.persist_ingestion_rejection("playback", reasons, payload.dict())
+        raise HTTPException(status_code=422, detail={"rejection_reasons": reasons})
 
     # Idempotency: skip duplicate start events
     idem_key = f"idem:playback:{payload.playback_id}:{payload.event_type}"
@@ -454,6 +472,11 @@ def playback_event(payload: PlaybackEventBody, request: Request) -> dict:
 def navidrome_playback_event(payload: NavidromePlaybackEventBody, request: Request) -> dict:
     auth_session = require_authenticated_session(request, repository)
 
+    reasons = _validate_playback(payload.dict(), "event_type")
+    if reasons:
+        repository.persist_ingestion_rejection("navidrome_playback", reasons, payload.dict())
+        raise HTTPException(status_code=422, detail={"rejection_reasons": reasons})
+
     idem_key = f"idem:navidrome-playback:{payload.playback_id}:{payload.event_type}"
     if runtime_state.get_string(idem_key):
         return {"status": "duplicate"}
@@ -487,6 +510,42 @@ def navidrome_playback_event(payload: NavidromePlaybackEventBody, request: Reque
         "session_id": session_id,
         "track_id": track.track_id,
     }
+
+
+# ------------------------------------------------------------------ #
+# Feedback events
+# ------------------------------------------------------------------ #
+
+class FeedbackEventBody(BaseModel):
+    event_id: str
+    feedback_type: str          # "like" | "dislike"
+    track_id: str
+    session_id: str
+    impression_id: Optional[str] = None
+
+
+@app.post("/events/feedback")
+def feedback_event(payload: FeedbackEventBody, request: Request) -> dict:
+    auth_session = require_authenticated_session(request, repository)
+
+    if payload.feedback_type not in {"like", "dislike"}:
+        reasons = [f"feedback_type must be 'like' or 'dislike', got '{payload.feedback_type}'"]
+        repository.persist_ingestion_rejection("feedback", reasons, payload.dict())
+        raise HTTPException(status_code=422, detail={"rejection_reasons": reasons})
+
+    idem_key = f"idem:feedback:{payload.event_id}"
+    if runtime_state.get_string(idem_key):
+        return {"status": "duplicate"}
+
+    repository.persist_feedback_event(payload.event_id, {
+        "feedback_type": payload.feedback_type,
+        "session_id": payload.session_id,
+        "user_id": auth_session.user_id,
+        "track_id": payload.track_id,
+        "impression_id": payload.impression_id,
+    })
+    runtime_state.set_string(idem_key, "1", ttl_seconds=86400)
+    return {"status": "ok", "feedback_type": payload.feedback_type}
 
 
 # ------------------------------------------------------------------ #
