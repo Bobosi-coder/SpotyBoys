@@ -386,7 +386,7 @@ def _update_model_status(conn) -> None:
         cur.execute(
             """
             SELECT
-                COUNT(*) FILTER (WHERE event_type = 'skip') AS skips,
+                COUNT(*) FILTER (WHERE playratio < 0.2) AS skips,
                 COUNT(*) AS total
             FROM app.playback_events
             WHERE playratio IS NOT NULL
@@ -397,9 +397,11 @@ def _update_model_status(conn) -> None:
         skips, total = (row[0] or 0), (row[1] or 0)
 
     if total < 50:
+        log.info(f"Not enough playback events for degradation check: total={total} < 50")
         return  # Not enough data to make a determination
 
     skip_rate = skips / total
+    log.info(f"Model degradation check: skips={skips} total={total} skip_rate={skip_rate:.2%}")
     if skip_rate > 0.80:
         log.warning(f"High skip rate detected: {skip_rate:.2%} — marking model as degraded")
         with conn.cursor() as cur:
