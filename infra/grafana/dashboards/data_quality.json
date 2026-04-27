@@ -13,18 +13,18 @@
     {
       "id": 1,
       "type": "text",
-      "title": "① Ingestion Quality Gate",
+      "title": "① Loved Tracks (Navidrome Stars)",
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 2 },
       "options": {
         "mode": "markdown",
-        "content": "## ① Ingestion Quality Gate\nEvents rejected at the API boundary before entering the database."
+        "content": "## ① Loved Tracks (Navidrome Stars)\nUser stars synced from Navidrome via `getStarred2` by the delta-export-worker into `app.loved_tracks`. Timestamps reflect sync time (runs every 24 h)."
       }
     },
 
     {
       "id": 2,
       "type": "stat",
-      "title": "Total Rejections (24 h)",
+      "title": "Loved Tracks (since last sync)",
       "gridPos": { "x": 0, "y": 2, "w": 4, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "options": {
@@ -38,11 +38,7 @@
         "defaults": {
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 1 },
-              { "color": "red", "value": 10 }
-            ]
+            "steps": [{ "color": "blue", "value": null }]
           },
           "color": { "mode": "thresholds" }
         }
@@ -50,7 +46,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT COUNT(*) AS value FROM app.ingestion_rejections WHERE created_at >= NOW() - INTERVAL '24 hours'",
+          "rawSql": "SELECT COUNT(*) AS value FROM app.loved_tracks WHERE loved_at >= NOW() - INTERVAL '24 hours'",
           "format": "table",
           "refId": "A"
         }
@@ -59,15 +55,30 @@
 
     {
       "id": 3,
-      "type": "piechart",
-      "title": "Rejections by Event Type",
+      "type": "stat",
+      "title": "Total Loved Tracks (All Time)",
       "gridPos": { "x": 4, "y": 2, "w": 6, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-      "options": { "pieType": "pie", "legendDisplayMode": "table" },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "color": { "mode": "thresholds" }
+        }
+      },
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT event_type AS metric, COUNT(*) AS value FROM app.ingestion_rejections WHERE created_at >= NOW() - INTERVAL '24 hours' GROUP BY event_type",
+          "rawSql": "SELECT COUNT(*) AS value FROM app.loved_tracks",
           "format": "table",
           "refId": "A"
         }
@@ -77,7 +88,7 @@
     {
       "id": 4,
       "type": "timeseries",
-      "title": "Rejection Count Over Time",
+      "title": "Love Activity Over Time",
       "gridPos": { "x": 10, "y": 2, "w": 14, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "fieldConfig": {
@@ -90,7 +101,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT date_trunc('hour', created_at) AS time, event_type, COUNT(*) AS rejections FROM app.ingestion_rejections WHERE $__timeFilter(created_at) GROUP BY 1, 2 ORDER BY 1",
+          "rawSql": "SELECT date_trunc('hour', loved_at) AS time, COUNT(*) AS loves FROM app.loved_tracks WHERE $__timeFilter(loved_at) GROUP BY 1 ORDER BY 1",
           "format": "table",
           "refId": "A"
         }
@@ -104,7 +115,7 @@
       "gridPos": { "x": 0, "y": 6, "w": 24, "h": 2 },
       "options": {
         "mode": "markdown",
-        "content": "## ② Live Inference Data Quality & Drift\nBehavioral signals from production inference stream. Drift = deviation from rolling baseline."
+        "content": "## ② Live Inference Data Quality & Drift\nBehavioral signals from production playback events. Skip/completion rates computed from finalized events (`playratio IS NOT NULL`)."
       }
     },
 
@@ -138,7 +149,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT ROUND(COUNT(*) FILTER (WHERE event_type = 'skip')::numeric / NULLIF(COUNT(*),0), 4) AS value FROM app.playback_events WHERE occurred_at >= NOW() - INTERVAL '24 hours'",
+          "rawSql": "SELECT ROUND(COUNT(*) FILTER (WHERE event_type = 'skip')::numeric / NULLIF(COUNT(*), 0), 4) AS value FROM app.playback_events WHERE playratio IS NOT NULL AND created_at >= NOW() - INTERVAL '24 hours'",
           "format": "table",
           "refId": "A"
         }
@@ -175,7 +186,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT ROUND(COUNT(*) FILTER (WHERE event_type = 'complete')::numeric / NULLIF(COUNT(*),0), 4) AS value FROM app.playback_events WHERE occurred_at >= NOW() - INTERVAL '24 hours'",
+          "rawSql": "SELECT ROUND(COUNT(*) FILTER (WHERE event_type = 'complete')::numeric / NULLIF(COUNT(*), 0), 4) AS value FROM app.playback_events WHERE playratio IS NOT NULL AND created_at >= NOW() - INTERVAL '24 hours'",
           "format": "table",
           "refId": "A"
         }
@@ -185,34 +196,41 @@
     {
       "id": 13,
       "type": "stat",
-      "title": "Like Rate (24 h)",
+      "title": "Model Status",
       "gridPos": { "x": 8, "y": 8, "w": 4, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
         "colorMode": "background",
-        "graphMode": "area",
+        "graphMode": "none",
         "textMode": "auto",
         "orientation": "auto"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "red", "value": null },
-              { "color": "yellow", "value": 0.03 },
-              { "color": "green", "value": 0.07 }
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
             ]
           },
-          "color": { "mode": "thresholds" }
+          "color": { "mode": "thresholds" },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": { "text": "Healthy" },
+                "1": { "text": "Degraded" }
+              }
+            }
+          ]
         }
       },
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT ROUND(COUNT(*) FILTER (WHERE feedback_type = 'like')::numeric / NULLIF((SELECT COUNT(*) FROM app.recommendation_impressions WHERE created_at >= NOW() - INTERVAL '24 hours'),0), 4) AS value FROM app.feedback_events WHERE occurred_at >= NOW() - INTERVAL '24 hours'",
+          "rawSql": "SELECT CASE WHEN degraded THEN 1 ELSE 0 END AS value FROM app.model_status WHERE id = 1",
           "format": "table",
           "refId": "A"
         }
@@ -222,7 +240,7 @@
     {
       "id": 14,
       "type": "stat",
-      "title": "Ingestion Rejection Rate (24 h)",
+      "title": "Active Users (24 h)",
       "gridPos": { "x": 12, "y": 8, "w": 4, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "options": {
@@ -234,14 +252,9 @@
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "percentunit",
           "thresholds": {
             "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 0.02 },
-              { "color": "red", "value": 0.05 }
-            ]
+            "steps": [{ "color": "blue", "value": null }]
           },
           "color": { "mode": "thresholds" }
         }
@@ -249,7 +262,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT ROUND(rejected::numeric / NULLIF(rejected + accepted, 0), 4) AS value FROM (SELECT (SELECT COUNT(*) FROM app.ingestion_rejections WHERE created_at >= NOW() - INTERVAL '24 hours') AS rejected, (SELECT COUNT(*) FROM app.playback_events WHERE occurred_at >= NOW() - INTERVAL '24 hours') + (SELECT COUNT(*) FROM app.feedback_events WHERE occurred_at >= NOW() - INTERVAL '24 hours') + (SELECT COUNT(*) FROM app.rendered_impressions WHERE received_at >= NOW() - INTERVAL '24 hours') AS accepted) t",
+          "rawSql": "SELECT COUNT(DISTINCT user_int_id) AS value FROM app.playback_events WHERE created_at >= NOW() - INTERVAL '24 hours'",
           "format": "table",
           "refId": "A"
         }
@@ -273,7 +286,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT date_trunc('hour', occurred_at) AS time, ROUND(COUNT(*) FILTER (WHERE event_type='skip')::numeric / NULLIF(COUNT(*),0), 4) AS \"skip_rate\", ROUND(COUNT(*) FILTER (WHERE event_type='complete')::numeric / NULLIF(COUNT(*),0), 4) AS \"completion_rate\" FROM app.playback_events WHERE $__timeFilter(occurred_at) GROUP BY 1 ORDER BY 1",
+          "rawSql": "SELECT date_trunc('hour', created_at) AS time, ROUND(COUNT(*) FILTER (WHERE event_type = 'skip')::numeric / NULLIF(COUNT(*), 0), 4) AS \"skip_rate\", ROUND(COUNT(*) FILTER (WHERE event_type = 'complete')::numeric / NULLIF(COUNT(*), 0), 4) AS \"completion_rate\" FROM app.playback_events WHERE playratio IS NOT NULL AND $__timeFilter(created_at) GROUP BY 1 ORDER BY 1",
           "format": "table",
           "refId": "A"
         }
@@ -283,7 +296,7 @@
     {
       "id": 16,
       "type": "timeseries",
-      "title": "Event Volume Over Time (hourly)",
+      "title": "Playback Event Volume Over Time (hourly)",
       "gridPos": { "x": 14, "y": 12, "w": 10, "h": 6 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "fieldConfig": {
@@ -296,7 +309,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT date_trunc('hour', occurred_at) AS time, 'playback' AS metric, COUNT(*) AS value FROM app.playback_events WHERE $__timeFilter(occurred_at) GROUP BY 1 UNION ALL SELECT date_trunc('hour', occurred_at), 'feedback', COUNT(*) FROM app.feedback_events WHERE $__timeFilter(occurred_at) GROUP BY 1 UNION ALL SELECT date_trunc('hour', created_at), 'impression', COUNT(*) FROM app.recommendation_impressions WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1",
+          "rawSql": "SELECT date_trunc('hour', created_at) AS time, COUNT(*) AS playback_events FROM app.playback_events WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1",
           "format": "table",
           "refId": "A"
         }
@@ -339,7 +352,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT COUNT(*) AS value FROM app.sessions",
+          "rawSql": "SELECT COUNT(*) AS value FROM app.rec_sessions",
           "format": "table",
           "refId": "A"
         }
@@ -375,7 +388,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT COUNT(*) AS value FROM app.sessions WHERE session_int_id > COALESCE((SELECT last_exported_session_int_id FROM app.delta_export_metadata ORDER BY recorded_at DESC LIMIT 1), 0)",
+          "rawSql": "SELECT COUNT(*) AS value FROM app.rec_sessions WHERE session_int_id > COALESCE((SELECT session_int_id_watermark FROM app.delta_checkpoint ORDER BY id DESC LIMIT 1), 0)",
           "format": "table",
           "refId": "A"
         }
@@ -385,7 +398,7 @@
     {
       "id": 23,
       "type": "stat",
-      "title": "Successful Delta Exports",
+      "title": "Delta Exports Completed",
       "gridPos": { "x": 8, "y": 20, "w": 4, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "options": {
@@ -407,7 +420,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT COUNT(*) AS value FROM app.delta_export_metadata WHERE status = 'success'",
+          "rawSql": "SELECT COUNT(*) AS value FROM app.delta_checkpoint",
           "format": "table",
           "refId": "A"
         }
@@ -420,18 +433,20 @@
       "title": "Delta Export History",
       "gridPos": { "x": 12, "y": 20, "w": 12, "h": 6 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-      "options": { "sortBy": [{ "displayName": "recorded_at", "desc": true }] },
+      "options": { "sortBy": [{ "displayName": "exported_at", "desc": true }] },
       "fieldConfig": {
         "defaults": {},
         "overrides": [
-          { "matcher": { "id": "byName", "options": "status" },
-            "properties": [{ "id": "custom.width", "value": 80 }] }
+          {
+            "matcher": { "id": "byName", "options": "exported_at" },
+            "properties": [{ "id": "custom.width", "value": 160 }]
+          }
         ]
       },
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT delta_version, status, session_tracks_rows, recorded_at FROM app.delta_export_metadata ORDER BY recorded_at DESC LIMIT 10",
+          "rawSql": "SELECT version AS delta_version, exported_at, session_int_id_watermark, rows_exported::text FROM app.delta_checkpoint ORDER BY id DESC LIMIT 10",
           "format": "table",
           "refId": "A"
         }
@@ -453,7 +468,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT date_trunc('hour', created_at) AS time, COUNT(*) AS \"new_sessions\" FROM app.sessions WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1",
+          "rawSql": "SELECT date_trunc('hour', created_at) AS time, COUNT(*) AS new_sessions FROM app.rec_sessions WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1",
           "format": "table",
           "refId": "A"
         }
@@ -475,7 +490,7 @@
       "targets": [
         {
           "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
-          "rawSql": "SELECT date_trunc('hour', occurred_at) AS time, COUNT(DISTINCT user_id) AS \"unique_users\", COUNT(DISTINCT track_id) AS \"unique_tracks\" FROM app.playback_events WHERE $__timeFilter(occurred_at) GROUP BY 1 ORDER BY 1",
+          "rawSql": "SELECT date_trunc('hour', created_at) AS time, COUNT(DISTINCT user_int_id) AS unique_users, COUNT(DISTINCT track_id) AS unique_tracks FROM app.playback_events WHERE $__timeFilter(created_at) GROUP BY 1 ORDER BY 1",
           "format": "table",
           "refId": "A"
         }
