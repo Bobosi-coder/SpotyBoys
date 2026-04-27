@@ -46,11 +46,16 @@ CREATE TABLE IF NOT EXISTS app.playback_events (
     position        INT NOT NULL,          -- position in queue (0-based)
     playratio       FLOAT,                 -- NULL on playback_start, set on skip/complete
     event_type      TEXT NOT NULL,         -- "playback_start" | "skip" | "complete"
-    created_at      TIMESTAMPTZ DEFAULT now()
+    created_at      TIMESTAMPTZ DEFAULT now(),
+    updated_at      TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE app.playback_events
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 
 CREATE INDEX IF NOT EXISTS idx_playback_events_session ON app.playback_events (session_int_id);
 CREATE INDEX IF NOT EXISTS idx_playback_events_playratio ON app.playback_events (session_int_id) WHERE playratio IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_playback_events_updated_at ON app.playback_events (updated_at);
 
 -- Navidrome stars → 30Music love (synced by delta-export-worker)
 CREATE TABLE IF NOT EXISTS app.loved_tracks (

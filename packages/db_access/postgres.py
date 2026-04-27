@@ -462,7 +462,7 @@ class PostgresRepository:
                 cur.execute(
                     """
                     UPDATE app.playback_events
-                    SET event_type = %s, playratio = %s
+                    SET event_type = %s, playratio = %s, updated_at = NOW()
                     WHERE event_id = %s
                     """,
                     (event_type, playratio, event_id),
@@ -730,10 +730,28 @@ class PostgresRepository:
                 cur.execute(
                     """
                     SELECT event_id, session_int_id, user_int_id, track_id, position,
-                           playratio, event_type, created_at
+                           playratio, event_type,
+                           CASE
+                             WHEN event_type IN ('skip', 'complete') OR playratio IS NOT NULL
+                             THEN COALESCE(updated_at, created_at)
+                             ELSE created_at
+                           END AS event_time
                     FROM app.playback_events
-                    WHERE created_at >= %s AND created_at <= %s
-                    ORDER BY created_at
+                    WHERE (
+                        CASE
+                          WHEN event_type IN ('skip', 'complete') OR playratio IS NOT NULL
+                          THEN COALESCE(updated_at, created_at)
+                          ELSE created_at
+                        END
+                    ) >= %s
+                      AND (
+                        CASE
+                          WHEN event_type IN ('skip', 'complete') OR playratio IS NOT NULL
+                          THEN COALESCE(updated_at, created_at)
+                          ELSE created_at
+                        END
+                      ) <= %s
+                    ORDER BY event_time
                     """,
                     (window_start, window_end),
                 )

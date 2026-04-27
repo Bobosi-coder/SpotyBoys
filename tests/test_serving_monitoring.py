@@ -91,6 +91,24 @@ class ServingMonitoringTests(unittest.TestCase):
         self.assertEqual(response.degraded_reason, "manual_degraded")
         self.assertEqual(response.degraded_action, "fallback_only")
 
+    def test_degraded_fallback_metric_does_not_reuse_previous_candidate_count(self) -> None:
+        repo = DemoRepository(self._tracks(8))
+        runtime = InMemoryRuntimeState()
+        bundle = ServingBundle.load(PROJECT_ROOT / "fixtures" / "serving_bundle" / "Real_service" / "demo-fixture-v1")
+        service = RecommendationService(repo, runtime, bundle)
+
+        first = service.recommend_next(RecommendationRequest(session_id="sess_normal", user_id="user_demo"))
+        self.assertEqual(first.fallback_state, "healthy")
+        first_metric = list(repo.serving_request_metrics.values())[-1]
+        self.assertGreater(first_metric["candidate_count"], 0)
+
+        repo.upsert_model_status(True, "manual_degraded", "fallback_only")
+        second = service.recommend_next(RecommendationRequest(session_id="sess_degraded_metric", user_id="user_demo"))
+
+        self.assertEqual(second.fallback_state, "fallback_only")
+        second_metric = list(repo.serving_request_metrics.values())[-1]
+        self.assertEqual(second_metric["candidate_count"], 0)
+
     def test_rollup_and_rollback_thresholds(self) -> None:
         now = datetime.now(timezone.utc)
         inputs = {

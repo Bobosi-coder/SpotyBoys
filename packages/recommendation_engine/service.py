@@ -179,6 +179,7 @@ class RecommendationService:
         disliked_track_ids = set(self.repository.list_disliked_track_ids(user_id)) if user_id else set()
         force_safe_fallback = bool(model_status.get("degraded")) or not self.pipeline
         pipeline_error: Exception | None = None
+        current_trace: PipelineTrace | None = None
         pipeline_started = time.perf_counter()
         ranked: List[PlayableTrackRecord] = []
         if not force_safe_fallback:
@@ -188,6 +189,7 @@ class RecommendationService:
                     session_id=session_id,
                     user_id=user_id,
                 )
+                current_trace = self.last_pipeline_trace
             except Exception as exc:
                 pipeline_error = exc
                 ranked = []
@@ -245,7 +247,7 @@ class RecommendationService:
             browse_surface=browse_surface,
             queue_items=queue_items,
             decision=decision,
-            candidate_count=self._candidate_count(len(ranked)),
+            candidate_count=self._candidate_count(len(ranked), current_trace),
             playable_count=len(all_playable),
             pipeline_latency_ms=pipeline_latency_ms,
             total_latency_ms=total_latency_ms,
@@ -373,8 +375,7 @@ class RecommendationService:
         except Exception:
             return {"degraded": False, "reason": None, "action": DegradedAction.NORMAL.value}
 
-    def _candidate_count(self, ranked_count: int) -> int:
-        trace = self.last_pipeline_trace
+    def _candidate_count(self, ranked_count: int, trace: PipelineTrace | None) -> int:
         if trace and trace.c2_candidate_count:
             return int(trace.c2_candidate_count)
         return ranked_count

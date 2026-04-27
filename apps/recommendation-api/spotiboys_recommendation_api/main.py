@@ -330,7 +330,7 @@ def bootstrap(request: Request) -> dict:
         queue = runtime_state.set_queue(session_id, queue_items, fallback_level=decision.fallback_level.value)
 
     model_status = _get_model_status_cached()
-    decision = recommendation_service.last_serving_decision
+    session_status = _session_status_from_queue(queue, model_status)
 
     items = queue.items
     up_next = [_queue_item_dict(item) for item in items[:4]]
@@ -347,10 +347,10 @@ def bootstrap(request: Request) -> dict:
         },
         "model_version": serving_bundle.model_version,
         "fallback_level": queue.fallback_level.value if hasattr(queue.fallback_level, "value") else str(queue.fallback_level),
-        "fallback_state": decision.state.value,
-        "degraded": bool(model_status.get("degraded")) or decision.degraded,
-        "degraded_reason": decision.reason or model_status.get("reason"),
-        "degraded_action": decision.action.value if hasattr(decision.action, "value") else str(model_status.get("action") or "normal"),
+        "fallback_state": session_status["fallback_state"],
+        "degraded": session_status["degraded"],
+        "degraded_reason": session_status["degraded_reason"],
+        "degraded_action": session_status["degraded_action"],
     }
 
 
@@ -694,6 +694,40 @@ def _reload_serving_bundle(new_bundle: ServingBundle) -> None:
         new_bundle,
         require_full_ml_pipeline=config.require_full_ml_pipeline,
     )
+
+
+def _session_status_from_queue(queue: QueueState, model_status: dict) -> dict:
+    fallback_level = queue.fallback_level.value if hasattr(queue.fallback_level, "value") else str(queue.fallback_level)
+    degraded = bool(model_status.get("degraded", False))
+    action = str(model_status.get("action") or "normal")
+    reason = model_status.get("reason")
+    if degraded and action == "fallback_only":
+        return {
+            "fallback_state": "fallback_only",
+            "degraded": True,
+            "degraded_reason": reason or "manual_degraded",
+            "degraded_action": action,
+        }
+    if degraded:
+        return {
+            "fallback_state": "model_degraded",
+            "degraded": True,
+            "degraded_reason": reason or "manual_degraded",
+            "degraded_action": action,
+        }
+    if fallback_level != "none":
+        return {
+            "fallback_state": "fallback_only",
+            "degraded": True,
+            "degraded_reason": "session_fallback_queue",
+            "degraded_action": "fallback_only",
+        }
+    return {
+        "fallback_state": "healthy",
+        "degraded": False,
+        "degraded_reason": None,
+        "degraded_action": action,
+    }
 
 
 def _record_admin_decision(
