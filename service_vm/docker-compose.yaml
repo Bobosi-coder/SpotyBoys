@@ -1,4 +1,4 @@
-name: spotyboys
+name: spotyboys_training
 
 x-airflow-common: &airflow-common
   image: apache/airflow:2.9.3
