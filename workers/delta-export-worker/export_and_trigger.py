@@ -209,14 +209,30 @@ def run_export() -> None:
             # playlist_tracks_addition.parquet
             cur.execute(
                 """
-                SELECT p.playlist_int_id AS playlist_id, pt.position, pt.track_id
+                SELECT p.playlist_int_id AS playlist_id,
+                       p.user_int_id AS user_id,
+                       pt.position,
+                       pt.track_id
                 FROM app.playlist_tracks pt
                 JOIN app.user_playlists p USING (playlist_int_id)
                 WHERE p.synced_at > %s AND p.synced_at <= %s
+                ORDER BY p.playlist_int_id, pt.position
                 """,
                 (last_exported_at, export_cutoff),
             )
-            playlist_tracks_df = pd.DataFrame(cur.fetchall(), columns=["playlist_id", "position", "track_id"])
+            playlist_tracks_df = pd.DataFrame(
+                cur.fetchall(),
+                columns=["playlist_id", "user_id", "position", "track_id"],
+            )
+
+        session_tracks_df, session_meta_df, love_df, users_df, playlist_tracks_df = _normalize_delta_frames(
+            pd,
+            session_tracks_df,
+            session_meta_df,
+            love_df,
+            users_df,
+            playlist_tracks_df,
+        )
 
         # Find the highest session_int_id exported
         new_watermark = int(session_meta_df["session_id"].max()) if not session_meta_df.empty else last_watermark
@@ -288,6 +304,85 @@ def _get_active_users(conn):
             """
         )
         return [row[0] for row in cur.fetchall()]
+
+
+def _normalize_delta_frames(pd, session_tracks_df, session_meta_df, love_df, users_df, playlist_tracks_df):
+    """Match the item2vec snapshot parquet schemas and fail fast on invalid deltas."""
+    session_tracks_df = _coerce_frame(
+        session_tracks_df,
+        ["session_id", "user_id", "position", "track_id", "playratio", "label"],
+        {
+            "session_id": "int64",
+            "user_id": "int64",
+            "position": "int64",
+            "track_id": "int64",
+            "playratio": "float64",
+            "label": "object",
+        },
+    )
+    if not session_tracks_df.empty:
+        invalid_labels = set(session_tracks_df["label"].dropna().unique()) - {"positive", "neutral", "skip"}
+        if invalid_labels:
+            raise RuntimeError(f"Invalid session track labels: {sorted(invalid_labels)}")
+        invalid_playratio = session_tracks_df[
+            session_tracks_df["playratio"].isna()
+            | (session_tracks_df["playratio"] < 0.0)
+            | (session_tracks_df["playratio"] > 1.0)
+        ]
+        if not invalid_playratio.empty:
+            raise RuntimeError(f"Invalid playratio rows: {len(invalid_playratio)}")
+        duplicate_positions = session_tracks_df.duplicated(["session_id", "position"]).sum()
+        if duplicate_positions:
+            raise RuntimeError(f"Duplicate session_id/position rows in session_tracks delta: {duplicate_positions}")
+        session_tracks_df = session_tracks_df.sort_values(["session_id", "position"]).reset_index(drop=True)
+
+    session_meta_df = _coerce_frame(
+        session_meta_df,
+        ["session_id", "user_id"],
+        {"session_id": "int64", "user_id": "int64"},
+    )
+    if not session_meta_df.empty:
+        session_meta_df = session_meta_df.drop_duplicates(["session_id", "user_id"]).sort_values("session_id").reset_index(drop=True)
+
+    love_df = _coerce_frame(
+        love_df,
+        ["user_id", "track_id"],
+        {"user_id": "int64", "track_id": "int64"},
+    )
+    if not love_df.empty:
+        love_df = love_df.drop_duplicates(["user_id", "track_id"]).sort_values(["user_id", "track_id"]).reset_index(drop=True)
+
+    users_df = _coerce_frame(users_df, ["user_id"], {"user_id": "int64"})
+    if not users_df.empty:
+        users_df = users_df.drop_duplicates(["user_id"]).sort_values("user_id").reset_index(drop=True)
+
+    playlist_tracks_df = _coerce_frame(
+        playlist_tracks_df,
+        ["playlist_id", "user_id", "position", "track_id"],
+        {
+            "playlist_id": "int64",
+            "user_id": "int64",
+            "position": "int64",
+            "track_id": "int64",
+        },
+    )
+    if not playlist_tracks_df.empty:
+        duplicate_playlist_positions = playlist_tracks_df.duplicated(["playlist_id", "position"]).sum()
+        if duplicate_playlist_positions:
+            raise RuntimeError(
+                f"Duplicate playlist_id/position rows in playlist_tracks delta: {duplicate_playlist_positions}"
+            )
+        playlist_tracks_df = playlist_tracks_df.sort_values(["playlist_id", "position"]).reset_index(drop=True)
+
+    return session_tracks_df, session_meta_df, love_df, users_df, playlist_tracks_df
+
+
+def _coerce_frame(df, columns, dtypes):
+    df = df.reindex(columns=columns)
+    for column in columns:
+        if column not in df:
+            df[column] = []
+    return df.astype(dtypes, copy=False)
 
 
 def _sync_loved_tracks(conn) -> None:
