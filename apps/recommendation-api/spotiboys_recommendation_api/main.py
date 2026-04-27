@@ -57,6 +57,12 @@ app.add_middleware(
 )
 
 
+class ModelStatusBody(BaseModel):
+    degraded: bool
+    reason: Optional[str] = None
+    action: str = Field("normal", regex="^(normal|fallback_only)$")
+
+
 # ------------------------------------------------------------------ #
 # Health
 # ------------------------------------------------------------------ #
@@ -320,10 +326,11 @@ def bootstrap(request: Request) -> dict:
             session_id,
             auth_session.user_id,
         )
-        queue = runtime_state.set_queue(session_id, queue_items)
+        decision = recommendation_service.last_serving_decision
+        queue = runtime_state.set_queue(session_id, queue_items, fallback_level=decision.fallback_level.value)
 
-    # Check model degraded flag (Redis-cached)
-    model_degraded = _check_model_degraded()
+    model_status = _get_model_status_cached()
+    session_status = _session_status_from_queue(queue, model_status)
 
     items = queue.items
     up_next = [_queue_item_dict(item) for item in items[:4]]
@@ -339,7 +346,11 @@ def bootstrap(request: Request) -> dict:
             "fallback_level": queue.fallback_level.value if hasattr(queue.fallback_level, "value") else str(queue.fallback_level),
         },
         "model_version": serving_bundle.model_version,
-        "fallback_level": "degraded" if model_degraded else (queue.fallback_level.value if hasattr(queue.fallback_level, "value") else str(queue.fallback_level)),
+        "fallback_level": queue.fallback_level.value if hasattr(queue.fallback_level, "value") else str(queue.fallback_level),
+        "fallback_state": session_status["fallback_state"],
+        "degraded": session_status["degraded"],
+        "degraded_reason": session_status["degraded_reason"],
+        "degraded_action": session_status["degraded_action"],
     }
 
 
@@ -366,8 +377,14 @@ def recommendations_next(payload: RecommendationRequest, request: Request) -> di
             "remaining": [_queue_item_dict(item) for item in items[4:]],
             "revision": response.queue.revision,
             "fallback_level": response.fallback_level.value if hasattr(response.fallback_level, "value") else str(response.fallback_level),
+            "fallback_state": response.fallback_state,
         },
-        "model_version": serving_bundle.model_version,
+        "model_version": response.model_version,
+        "fallback_level": response.fallback_level.value if hasattr(response.fallback_level, "value") else str(response.fallback_level),
+        "fallback_state": response.fallback_state,
+        "degraded": response.degraded,
+        "degraded_reason": response.degraded_reason,
+        "degraded_action": response.degraded_action,
     }
 
 
@@ -554,6 +571,12 @@ def monitoring_summary(request: Request) -> dict:
     require_authenticated_session(request, repository)
     summary = repository.get_monitoring_summary()
     summary["model_version"] = serving_bundle.model_version
+    summary["serving_bundle_version"] = serving_bundle.version
+    summary.setdefault("active_model_version", repository.get_active_model_version())
+    summary.setdefault("latest_rollup_5m", repository.latest_serving_metric_rollup("5m"))
+    summary.setdefault("latest_rollup_1h", repository.latest_serving_metric_rollup("1h"))
+    summary.setdefault("latest_rollback_decision", repository.latest_model_trigger_decision("rollback_check"))
+    summary.setdefault("latest_promotion_decision", repository.latest_model_trigger_decision("promotion_gate"))
     summary["generated_at"] = datetime.now(timezone.utc).isoformat()
     return summary
 
@@ -584,6 +607,14 @@ def admin_refresh_serving_bundle(request: Request) -> dict:
         new_bundle = ServingBundle.load(staged_path)
         with _serving_reload_lock:
             _reload_serving_bundle(new_bundle)
+        try:
+            repository.register_active_model_version(
+                new_bundle.model_version,
+                new_bundle.version,
+                str(new_bundle.bundle_path / "manifest.json"),
+            )
+        except Exception:
+            pass
         return {
             "status": "refreshed",
             "model_version": new_bundle.model_version,
@@ -591,29 +622,58 @@ def admin_refresh_serving_bundle(request: Request) -> dict:
             "serving_bundle_path": str(new_bundle.bundle_path),
         }
     except Exception as exc:
+        _record_admin_decision(
+            decision_type="promotion_gate",
+            model_version=serving_bundle.model_version,
+            decision="block",
+            reason=str(exc),
+            execution_note="refresh-serving-bundle failed before activation",
+        )
         raise HTTPException(status_code=502, detail=f"Serving bundle refresh failed: {exc}")
+
+
+@app.post("/admin/model-status")
+def admin_model_status(payload: ModelStatusBody, request: Request) -> dict:
+    _require_admin_or_session(request)
+    action = payload.action
+    if payload.degraded and action == "normal":
+        action = "fallback_only"
+    repository.upsert_model_status(payload.degraded, payload.reason, action)
+    _model_status_cache["expires"] = 0.0
+    _record_admin_decision(
+        decision_type="degraded_mode",
+        model_version=serving_bundle.model_version,
+        decision="mark_degraded" if payload.degraded else "clear_degraded",
+        reason=payload.reason or ("manual_degraded" if payload.degraded else "manual_clear"),
+        metrics_json={"action": action},
+        execution_note="manual admin model status update",
+    )
+    return {"status": "ok", "model_status": repository.get_model_status()}
 
 
 # ------------------------------------------------------------------ #
 # Helpers
 # ------------------------------------------------------------------ #
 
-_model_degraded_cache: dict = {"value": False, "expires": 0.0}
+_model_status_cache: dict = {"value": {"degraded": False, "reason": None, "action": "normal"}, "expires": 0.0}
 
 
 def _check_model_degraded() -> bool:
+    return bool(_get_model_status_cached().get("degraded", False))
+
+
+def _get_model_status_cached() -> dict:
     import time
     now = time.monotonic()
-    if now < _model_degraded_cache["expires"]:
-        return _model_degraded_cache["value"]
+    if now < _model_status_cache["expires"]:
+        return dict(_model_status_cache["value"])
     try:
         status = repository.get_model_status()
-        degraded = bool(status.get("degraded", False))
     except Exception:
-        degraded = False
-    _model_degraded_cache["value"] = degraded
-    _model_degraded_cache["expires"] = now + 300  # 5 min TTL
-    return degraded
+        status = {"degraded": False, "reason": None, "action": "normal"}
+    _model_status_cache["value"] = dict(status)
+    _model_status_cache["expires"] = now + 300  # 5 min TTL
+    return dict(status)
 
 
 def _ensure_session_int_cache(session_id: str) -> Optional[int]:
@@ -634,6 +694,69 @@ def _reload_serving_bundle(new_bundle: ServingBundle) -> None:
         new_bundle,
         require_full_ml_pipeline=config.require_full_ml_pipeline,
     )
+
+
+def _session_status_from_queue(queue: QueueState, model_status: dict) -> dict:
+    fallback_level = queue.fallback_level.value if hasattr(queue.fallback_level, "value") else str(queue.fallback_level)
+    degraded = bool(model_status.get("degraded", False))
+    action = str(model_status.get("action") or "normal")
+    reason = model_status.get("reason")
+    if degraded and action == "fallback_only":
+        return {
+            "fallback_state": "fallback_only",
+            "degraded": True,
+            "degraded_reason": reason or "manual_degraded",
+            "degraded_action": action,
+        }
+    if degraded:
+        return {
+            "fallback_state": "model_degraded",
+            "degraded": True,
+            "degraded_reason": reason or "manual_degraded",
+            "degraded_action": action,
+        }
+    if fallback_level != "none":
+        return {
+            "fallback_state": "fallback_only",
+            "degraded": True,
+            "degraded_reason": "session_fallback_queue",
+            "degraded_action": "fallback_only",
+        }
+    return {
+        "fallback_state": "healthy",
+        "degraded": False,
+        "degraded_reason": None,
+        "degraded_action": action,
+    }
+
+
+def _record_admin_decision(
+    *,
+    decision_type: str,
+    model_version: str,
+    decision: str,
+    reason: str,
+    metrics_json: Optional[dict] = None,
+    thresholds_json: Optional[dict] = None,
+    execution_note: Optional[str] = None,
+) -> None:
+    try:
+        repository.record_model_trigger_decision(
+            {
+                "decision_id": f"decision_{uuid.uuid4().hex}",
+                "decision_type": decision_type,
+                "model_version": model_version,
+                "decision": decision,
+                "reason": reason,
+                "metrics_json": metrics_json or {},
+                "thresholds_json": thresholds_json or {},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "executed": False,
+                "execution_note": execution_note,
+            }
+        )
+    except Exception:
+        return
 
 
 def _require_admin_or_session(request: Request) -> None:

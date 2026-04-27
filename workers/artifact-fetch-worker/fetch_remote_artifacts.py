@@ -4,6 +4,7 @@ import os
 import json
 import shutil
 import uuid
+import importlib.util
 from pathlib import Path
 from typing import Iterable, List
 
@@ -37,6 +38,11 @@ def fetch_remote_artifacts() -> Path:
     print(f"Selected serving bundle prefix {real_service_prefix}", flush=True)
     real_service_dest = _download_prefix(client, real_service_prefix, DEST_ROOT / real_service_prefix.rstrip("/"))
     print(f"Downloaded serving bundle to {real_service_dest}", flush=True)
+    gate_decision = _evaluate_activation_gate(real_service_dest)
+    print(
+        f"Promotion gate decision={gate_decision.get('decision')} reason={gate_decision.get('reason')}",
+        flush=True,
+    )
     _download_prefix(client, "Item2vec/", DEST_ROOT / "Item2vec")
     print(f"Downloaded Item2vec artifacts to {DEST_ROOT / 'Item2vec'}", flush=True)
     staged = _stage_runtime(real_service_dest, DEST_ROOT / "Item2vec")
@@ -160,6 +166,16 @@ def _copy_files(source: Path, destination: Path, names: Iterable[str]) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     for name in names:
         shutil.copy2(source / name, destination / name)
+
+
+def _evaluate_activation_gate(bundle_path: Path) -> dict:
+    script_path = Path(__file__).resolve().parents[2] / "jobs" / "promotion-gate" / "promotion_gate.py"
+    spec = importlib.util.spec_from_file_location("spotiboys_promotion_gate", script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load promotion gate from {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.evaluate_activation_gate(bundle_path)
 
 
 if __name__ == "__main__":

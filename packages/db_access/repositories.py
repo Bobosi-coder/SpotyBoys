@@ -40,6 +40,7 @@ class DemoRepository:
         self.serving_metric_rollups: Dict[str, Dict[str, Any]] = {}
         self.model_trigger_decisions: Dict[str, Dict[str, Any]] = {}
         self.model_versions: Dict[str, Dict[str, Any]] = {}
+        self.model_status: Dict[str, Any] = {"degraded": False, "reason": None, "action": "normal"}
 
     @classmethod
     def from_fixture(cls, path: str | Path) -> "DemoRepository":
@@ -194,7 +195,13 @@ class DemoRepository:
         return True
 
     def list_disliked_track_ids(self, user_id: str) -> List[str]:
-        return []
+        return [
+            str(event.get("track_id"))
+            for event in self.feedback_events.values()
+            if str(event.get("user_id") or "") == str(user_id)
+            and str(getattr(event.get("feedback_type"), "value", event.get("feedback_type")) or "") == "dislike"
+            and event.get("track_id") is not None
+        ]
 
     def seed_demo_state(self, user_id: str, session_id: str) -> None:
         return None
@@ -221,10 +228,16 @@ class DemoRepository:
             self.playback_events[event_id]["playratio"] = playratio
 
     def get_model_status(self) -> Dict[str, Any]:
-        return {"degraded": False, "reason": None}
+        return dict(self.model_status)
 
-    def upsert_model_status(self, degraded: bool, reason: Any = None) -> None:
-        pass
+    def upsert_model_status(self, degraded: bool, reason: Any = None, action: str = "normal") -> None:
+        action = action if action in {"normal", "fallback_only"} else "normal"
+        self.model_status = {
+            "degraded": bool(degraded),
+            "reason": reason,
+            "action": action,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
 
     def get_last_delta_checkpoint(self) -> None:
         return None
@@ -233,7 +246,20 @@ class DemoRepository:
         pass
 
     def get_monitoring_summary(self) -> Dict[str, Any]:
-        return {"last_delta_export": None, "model_status": {"degraded": False}, "user_count": 0, "finalized_playback_events": 0}
+        return {
+            "last_delta_export": None,
+            "model_status": self.get_model_status(),
+            "user_count": len(self.users),
+            "finalized_playback_events": len(
+                [event for event in self.playback_events.values() if event.get("playratio") is not None]
+            ),
+            "active_model_version": self.get_active_model_version(),
+            "previous_good_model_version": self.get_previous_good_model_version(),
+            "latest_rollup_5m": self.latest_serving_metric_rollup("5m"),
+            "latest_rollup_1h": self.latest_serving_metric_rollup("1h"),
+            "latest_rollback_decision": self.latest_model_trigger_decision("rollback_check"),
+            "latest_promotion_decision": self.latest_model_trigger_decision("promotion_gate"),
+        }
 
     def upsert_loved_track(self, user_int_id: int, track_id: int) -> None:
         pass
@@ -280,12 +306,21 @@ class DemoRepository:
         self.serving_request_metrics[str(metric["metric_id"])] = metric
 
     def get_monitoring_inputs(self, window_start: datetime, window_end: datetime) -> Dict[str, List[Dict[str, Any]]]:
+        def in_window(row: Dict[str, Any]) -> bool:
+            raw = row.get("created_at") or row.get("occurred_at") or row.get("received_at")
+            if not raw:
+                return True
+            value = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if value.tzinfo is None:
+                value = value.replace(tzinfo=timezone.utc)
+            return window_start <= value <= window_end
+
         return {
-            "request_metrics": list(self.serving_request_metrics.values()),
-            "recommendation_impressions": list(self.recommendation_impressions.values()),
-            "rendered_impressions": list(self.rendered_impressions.values()),
-            "playback_events": list(self.playback_events.values()),
-            "feedback_events": list(self.feedback_events.values()),
+            "request_metrics": [row for row in self.serving_request_metrics.values() if in_window(row)],
+            "recommendation_impressions": [row for row in self.recommendation_impressions.values() if in_window(row)],
+            "rendered_impressions": [row for row in self.rendered_impressions.values() if in_window(row)],
+            "playback_events": [row for row in self.playback_events.values() if in_window(row)],
+            "feedback_events": [row for row in self.feedback_events.values() if in_window(row)],
         }
 
     def write_serving_metric_rollup(self, payload: Dict[str, Any]) -> None:

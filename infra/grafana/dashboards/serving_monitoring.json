@@ -1,0 +1,142 @@
+{
+  "title": "SpotyBoys Serving Monitoring",
+  "uid": "spotiboys-serving-monitoring",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "tags": ["spotiboys", "serving", "monitoring"],
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Active Model Version",
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+          "rawSql": "SELECT COALESCE(model_version, 'none') AS value FROM app.model_versions WHERE is_active = TRUE ORDER BY activated_at DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "none", "graphMode": "none" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Model Degraded",
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+          "rawSql": "SELECT CASE WHEN degraded THEN 1 ELSE 0 END AS value FROM app.model_status WHERE id = 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }, "color": { "mode": "thresholds" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "none" }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Fallback Rate",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+          "rawSql": "SELECT fallback_rate AS value FROM app.serving_metric_rollups WHERE window_name = '5m' ORDER BY window_end DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.15 }, { "color": "red", "value": 0.25 }] }, "color": { "mode": "thresholds" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area" }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Error Rate",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+          "rawSql": "SELECT error_rate AS value FROM app.serving_metric_rollups WHERE window_name = '5m' ORDER BY window_end DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.02 }, { "color": "red", "value": 0.05 }] }, "color": { "mode": "thresholds" } } },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "auto", "colorMode": "background", "graphMode": "area" }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Serving Latency p95",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 7 },
+      "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+          "rawSql": "SELECT window_end AS time, p95_latency_ms FROM app.serving_metric_rollups WHERE $__timeFilter(window_end) ORDER BY window_end",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "ms" } },
+      "options": { "tooltip": { "mode": "single" } }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Outcome Rates",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 7 },
+      "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+          "rawSql": "SELECT window_end AS time, completion_rate, skip_rate, dislike_rate FROM app.serving_metric_rollups WHERE $__timeFilter(window_end) ORDER BY window_end",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "options": { "tooltip": { "mode": "multi" } }
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Latest Rollback Decision",
+      "gridPos": { "x": 0, "y": 11, "w": 12, "h": 5 },
+      "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+          "rawSql": "SELECT created_at, model_version, decision, reason, executed, execution_note FROM app.model_trigger_decisions WHERE decision_type = 'rollback_check' ORDER BY created_at DESC LIMIT 5",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Latest Promotion Decision",
+      "gridPos": { "x": 12, "y": 11, "w": 12, "h": 5 },
+      "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+          "rawSql": "SELECT created_at, model_version, decision, reason, executed, execution_note FROM app.model_trigger_decisions WHERE decision_type = 'promotion_gate' ORDER BY created_at DESC LIMIT 5",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

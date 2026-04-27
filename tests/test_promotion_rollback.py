@@ -95,7 +95,7 @@ class PromotionRollbackTests(unittest.TestCase):
         )
         repo.record_model_trigger_decision(decision)
 
-        self.assertEqual(repo.latest_model_trigger_decision("rollback")["decision"], "rollback_recommended")
+        self.assertEqual(repo.latest_model_trigger_decision("rollback_check")["decision"], "recommend_rollback")
 
 
 if __name__ == "__main__":
