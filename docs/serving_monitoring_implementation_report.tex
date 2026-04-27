@@ -1,0 +1,226 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{listings}
+\usepackage{enumitem}
+
+\lstdefinestyle{code}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  frame=single,
+  backgroundcolor=\color{gray!5}
+}
+\lstset{style=code}
+
+\title{SpotyBoys Serving and Monitoring Implementation Report}
+\author{SpotyBoys MLOps Project}
+\date{April 27, 2026}
+
+\begin{document}
+\maketitle
+
+\section*{Executive Summary}
+This implementation adds the missing serving and monitoring controls required for the SpotyBoys ML systems project while preserving the current Navidrome-first serving design. The work adds a real fallback state machine, actionable degraded mode, durable PostgreSQL serving telemetry, manual serving-monitor and rollback workers, a promotion gate before serving refresh, and an additive Grafana dashboard. Auto rollback remains disabled by default and all monitoring writes are non-fatal to recommendation serving.
+
+\section*{Requirement Mapping}
+\begin{longtable}{p{0.24\linewidth}p{0.34\linewidth}p{0.34\linewidth}}
+\toprule
+\textbf{Requirement} & \textbf{Implementation} & \textbf{Evidence} \\
+\midrule
+Online model serving behavior & \texttt{RecommendationService} still serves from the loaded serving bundle when healthy. & Call \texttt{/recommendations/next}. \\
+Fallback behavior & Explicit states in \texttt{packages/recommendation\_engine/serving\_state.py}. & Force pipeline exception; response has non-\texttt{none} fallback. \\
+Actionable degraded mode & \texttt{POST /admin/model-status} sets \texttt{degraded}, \texttt{reason}, and \texttt{action}. & \texttt{/monitoring/summary} shows degraded action. \\
+Operational monitoring & \texttt{app.serving\_request\_metrics} and rollups. & SQL query on metrics tables. \\
+Model output monitoring & Rollups compute fallback rate, returned count, catalog failures, top artist share, repeat violations. & Run serving monitor worker. \\
+Outcome monitoring & Rollups include completion, skip, dislike, and stream-failure metrics when data exists. & Query \texttt{app.serving\_metric\_rollups}. \\
+Promotion gate & \texttt{jobs/promotion-gate/promotion\_gate.py} and artifact refresh gate. & Missing or blocked decision prevents refresh. \\
+Rollback evaluation & \texttt{workers/rollback-check-worker/check\_rollback.py}. & Synthetic bad rollup yields \texttt{recommend\_rollback}. \\
+Monitoring over time & Long-running compose service and Grafana dashboard. & Open Grafana dashboard. \\
+\bottomrule
+\end{longtable}
+
+\section*{What Was Implemented}
+\begin{itemize}[leftmargin=*]
+  \item A durable monitoring schema for request metrics, rollups, decisions, and active model versions.
+  \item Postgres and in-memory repository methods for all monitoring and decision records.
+  \item A serving fallback state machine with states \texttt{healthy}, \texttt{model\_degraded}, \texttt{model\_unavailable}, \texttt{catalog\_insufficient}, \texttt{navidrome\_degraded}, and \texttt{fallback\_only}.
+  \item Degraded mode that changes recommendation behavior to safe fallback serving and exposes the action in API responses.
+  \item Manual workers for rollup generation and rollback checks.
+  \item A promotion gate requiring a valid bundle and approved \texttt{promotion\_decision.json}, with explicit override via \texttt{SPOTIBOYS\_ALLOW\_UNAPPROVED\_REFRESH=true}.
+  \item Additive Grafana dashboard \texttt{serving\_monitoring.json}; existing dashboards were not replaced.
+\end{itemize}
+
+\section*{File-by-File Changes}
+\begin{itemize}[leftmargin=*]
+  \item \texttt{db/001\_init.sql}: added monitoring, decision, model-version tables and model-status action column.
+  \item \texttt{packages/db\_access/repositories.py}: implemented demo repository persistence and actionable model status.
+  \item \texttt{packages/db\_access/postgres.py}: replaced serving-monitoring no-op stubs with real SQL persistence.
+  \item \texttt{packages/recommendation\_engine/serving\_state.py}: new fallback state machine.
+  \item \texttt{packages/recommendation\_engine/service.py}: fallback serving, degraded action, per-request telemetry.
+  \item \texttt{apps/recommendation-api/spotiboys\_recommendation\_api/main.py}: enriched recommendation/bootstrap/summary responses, added \texttt{/admin/model-status}, records refresh decisions and active model versions.
+  \item \texttt{packages/monitoring/rollups.py}: rollup and rollback threshold logic.
+  \item \texttt{workers/serving-monitor-worker/rollup\_metrics.py}: manual/loop rollup worker.
+  \item \texttt{workers/rollback-check-worker/check\_rollback.py}: manual rollback evaluator.
+  \item \texttt{jobs/promotion-gate/promotion\_gate.py}: promotion approval and activation gate logic.
+  \item \texttt{workers/artifact-fetch-worker/fetch\_remote\_artifacts.py}: enforces promotion gate before staging active bundle.
+  \item \texttt{docker-compose.yml}: added serving monitor and rollback check services.
+  \item \texttt{infra/grafana/dashboards/serving\_monitoring.json}: new additive dashboard.
+  \item \texttt{tests/test\_serving\_monitoring.py}: fallback, degraded, rollup, rollback tests.
+  \item \texttt{infra/scripts/generate\_fixture\_music.py}: restored fixture audio helper required by existing tests.
+\end{itemize}
+
+\section*{Code Snippets}
+\subsection*{Fallback State Decision}
+\begin{lstlisting}[language=Python]
+decision = decide_serving_state(
+    serving_bundle_available=bool(self.serving_bundle),
+    playable_count=len(all_playable),
+    ranked_count=len(ranked),
+    returned_count=len(queue_tracks),
+    model_status=model_status,
+    pipeline_error=pipeline_error,
+)
+\end{lstlisting}
+
+\subsection*{Serving Metric Persistence}
+\begin{lstlisting}[language=Python]
+repository.record_serving_request_metric({
+    "request_id": request_id,
+    "session_id": session_id,
+    "user_id": user_id,
+    "model_version": self.model_version,
+    "fallback_level": result.decision.fallback_level.value,
+    "fallback_state": result.decision.state.value,
+    "candidate_count": result.candidate_count,
+    "playable_count": result.playable_count,
+    "returned_count": len(result.queue_items),
+    "pipeline_latency_ms": result.pipeline_latency_ms,
+    "total_latency_ms": result.total_latency_ms,
+    "pipeline_error": result.decision.pipeline_error,
+})
+\end{lstlisting}
+
+\subsection*{Rollback Decision}
+\begin{lstlisting}[language=Python]
+decision = evaluate_rollback(
+    rollup,
+    active_model=repository.get_active_model_version(),
+    previous_model=repository.get_previous_good_model_version(),
+)
+repository.record_model_trigger_decision(decision)
+\end{lstlisting}
+
+\section*{Fallback State Machine}
+The state machine is defined in \texttt{packages/recommendation\_engine/serving\_state.py}. It derives state from bundle availability, pipeline exceptions, ranked output, playable catalog size, returned item count, and model status. The recommendation path catches pipeline exceptions and returns deterministic playable fallback items instead of crashing. API responses expose \texttt{fallback\_level}, \texttt{fallback\_state}, \texttt{degraded}, \texttt{degraded\_reason}, and \texttt{degraded\_action}.
+
+\section*{Degraded Mode}
+The endpoint \texttt{POST /admin/model-status} is protected by the existing admin/session auth helper. When degraded mode is enabled, the recommendation service uses safe fallback serving and marks responses as degraded. The current degraded state and action appear in \texttt{/monitoring/summary}.
+
+\section*{Serving Metrics Schema}
+\texttt{app.serving\_request\_metrics} stores per-request operational telemetry. \texttt{app.serving\_metric\_rollups} stores time-windowed aggregates. \texttt{app.model\_trigger\_decisions} stores promotion, rollback, and degraded-mode decisions. \texttt{app.model\_versions} stores active and previous-good model metadata. These tables are derived monitoring tables and do not replace raw playback or feedback events.
+
+\section*{Serving Monitor Worker}
+Run manually:
+\begin{lstlisting}[language=bash]
+python workers/serving-monitor-worker/rollup_metrics.py --window 5m --window 1h --print-json
+\end{lstlisting}
+Expected output is JSON with fields such as \texttt{request\_count}, \texttt{fallback\_rate}, \texttt{error\_rate}, \texttt{p95\_latency\_ms}, and \texttt{sample\_status}. With too few requests, \texttt{sample\_status} is \texttt{insufficient}.
+
+\section*{Rollback Evaluator}
+Run manually:
+\begin{lstlisting}[language=bash]
+python workers/rollback-check-worker/check_rollback.py --window 5m --print-json
+\end{lstlisting}
+The evaluator reads the latest rollup, active model, and previous-good model. It writes a decision to \texttt{app.model\_trigger\_decisions}. Auto rollback is disabled by default; the default behavior is a manual recommendation only.
+
+\section*{Promotion Gate}
+The promotion gate checks bundle validity and \texttt{promotion\_decision.json}. Missing or blocked promotion decisions stop activation unless:
+\begin{lstlisting}[language=bash]
+export SPOTIBOYS_ALLOW_UNAPPROVED_REFRESH=true
+\end{lstlisting}
+Successful refresh records the active model version. Failed refresh records a \texttt{promotion\_gate} block decision where the API can reach the repository.
+
+\section*{Grafana Dashboard}
+The new dashboard is \texttt{infra/grafana/dashboards/serving\_monitoring.json}. It uses datasource \texttt{spotiboys-pg} and queries the real \texttt{app.*} monitoring schema for active model, degraded status, fallback rate, error rate, p95 latency, outcome rates, rollback decisions, and promotion decisions. Existing dashboards remain unchanged.
+
+\section*{Where Each Implementation Is Required and How To See It In Action}
+\begin{longtable}{p{0.16\linewidth}p{0.22\linewidth}p{0.30\linewidth}p{0.24\linewidth}}
+\toprule
+\textbf{Feature} & \textbf{Where} & \textbf{How to Trigger} & \textbf{Evidence to Capture} \\
+\midrule
+Fallback state machine & \texttt{serving\_state.py}, \texttt{service.py} & Force pipeline exception in test or mark model degraded. & \texttt{/recommendations/next} returns playable items and non-\texttt{healthy} state. \\
+Degraded mode & \texttt{/admin/model-status} & POST \texttt{\{"degraded":true,"reason":"manual\_degraded","action":"fallback\_only"\}}. & \texttt{/monitoring/summary} shows degraded action. \\
+Serving metrics & \texttt{app.serving\_request\_metrics} & Make recommendation requests. & SQL row count increases. \\
+Rollup worker & \texttt{rollup\_metrics.py} & Run worker with \texttt{--window 5m --print-json}. & JSON output and row in \texttt{app.serving\_metric\_rollups}. \\
+Rollback evaluator & \texttt{check\_rollback.py} & Insert or generate high fallback/error rollup. & \texttt{recommend\_rollback} decision row. \\
+Promotion gate & \texttt{promotion\_gate.py}, artifact fetch worker & Try refresh with missing/blocked decision. & Refresh fails and promotion block is recorded. \\
+Grafana & \texttt{serving\_monitoring.json} & Open Grafana on port 3000. & Panels load without replacing existing dashboard. \\
+\bottomrule
+\end{longtable}
+
+\section*{Demo Commands}
+\begin{lstlisting}[language=bash]
+python -m unittest discover -s tests -v
+
+python workers/serving-monitor-worker/rollup_metrics.py \
+  --window 5m --window 1h --print-json
+
+python workers/rollback-check-worker/check_rollback.py \
+  --window 5m --print-json
+
+curl -s http://VM_HOST:8089/monitoring/summary \
+  -H "Authorization: Bearer TOKEN"
+
+curl -s -X POST http://VM_HOST:8089/admin/model-status \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"degraded":true,"reason":"manual_degraded","action":"fallback_only"}'
+
+psql "$DATABASE_URL" -c "SELECT fallback_state, COUNT(*) FROM app.serving_request_metrics GROUP BY 1;"
+psql "$DATABASE_URL" -c "SELECT window_name, request_count, fallback_rate, sample_status FROM app.serving_metric_rollups ORDER BY created_at DESC LIMIT 5;"
+psql "$DATABASE_URL" -c "SELECT decision_type, decision, reason FROM app.model_trigger_decisions ORDER BY created_at DESC LIMIT 5;"
+\end{lstlisting}
+
+\section*{Expected Outputs}
+\begin{itemize}[leftmargin=*]
+  \item Recommendation response includes \texttt{fallback\_state}, \texttt{fallback\_level}, \texttt{degraded}, \texttt{degraded\_reason}, and \texttt{degraded\_action}.
+  \item Rollup worker prints JSON. In a cold demo it should say \texttt{"sample\_status": "insufficient"} rather than crashing.
+  \item Rollback worker prints \texttt{no\_action} for insufficient samples and \texttt{recommend\_rollback} or \texttt{mark\_degraded} for threshold breaches with enough requests.
+  \item Promotion refresh with missing or blocked decision fails unless \texttt{SPOTIBOYS\_ALLOW\_UNAPPROVED\_REFRESH=true}.
+\end{itemize}
+
+\section*{Tests Added}
+\begin{itemize}[leftmargin=*]
+  \item Unit tests for pipeline exception fallback and catalog-insufficient state.
+  \item Unit test for manual degraded mode changing recommendation behavior.
+  \item Unit tests for rollup generation and rollback threshold decisions.
+  \item Existing promotion tests now run against the restored promotion gate module.
+\end{itemize}
+
+\section*{Known Limitations}
+\begin{itemize}[leftmargin=*]
+  \item Auto rollback is intentionally not mutating serving bundles by default.
+  \item The rollup worker computes outcome metrics only from events available in the current schema.
+  \item The dashboard requires the new schema to be initialized in Postgres before panels return data.
+  \item Promotion decisions must be emitted by the training pipeline or created locally for candidate bundles; override is explicit and opt-in.
+\end{itemize}
+
+\section*{Final Checklist}
+\begin{itemize}[leftmargin=*]
+  \item Fallback state machine implemented and tested.
+  \item Degraded mode implemented and tested.
+  \item Serving metrics persisted in PostgreSQL and demo repository.
+  \item Serving monitor worker implemented and manually validated.
+  \item Rollback evaluator implemented and manually validated.
+  \item Promotion gate implemented and tested.
+  \item Additive Grafana dashboard added.
+  \item LaTeX report created.
+  \item No git commit or push performed.
+\end{itemize}
+
+\end{document}

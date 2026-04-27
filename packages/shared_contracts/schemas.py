@@ -136,6 +136,10 @@ class RecommendationResponse(BaseModel):
     impression_id: str
     model_version: str
     fallback_level: FallbackLevel
+    fallback_state: str = "healthy"
+    degraded: bool = False
+    degraded_reason: Optional[str] = None
+    degraded_action: str = "normal"
     browse_surface: BrowseSurface
     queue: QueueUpdate
 

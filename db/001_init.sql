@@ -95,11 +95,105 @@ CREATE TABLE IF NOT EXISTS app.model_status (
     id          INT DEFAULT 1 PRIMARY KEY CHECK (id = 1),  -- single-row table
     degraded    BOOLEAN NOT NULL DEFAULT false,
     reason      TEXT,
+    action      TEXT NOT NULL DEFAULT 'normal',
     updated_at  TIMESTAMPTZ DEFAULT now()
 );
 
 INSERT INTO app.model_status (degraded) VALUES (false)
 ON CONFLICT (id) DO NOTHING;
+
+ALTER TABLE app.model_status
+    ADD COLUMN IF NOT EXISTS action TEXT NOT NULL DEFAULT 'normal';
+
+CREATE TABLE IF NOT EXISTS app.serving_request_metrics (
+    metric_id           TEXT PRIMARY KEY,
+    request_id          TEXT,
+    session_id          TEXT,
+    user_id             TEXT,
+    model_version       TEXT,
+    fallback_level      TEXT NOT NULL DEFAULT 'none',
+    fallback_state      TEXT NOT NULL DEFAULT 'healthy',
+    candidate_count     INT NOT NULL DEFAULT 0,
+    playable_count      INT NOT NULL DEFAULT 0,
+    returned_count      INT NOT NULL DEFAULT 0,
+    pipeline_latency_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
+    total_latency_ms    DOUBLE PRECISION NOT NULL DEFAULT 0,
+    pipeline_error      BOOLEAN NOT NULL DEFAULT false,
+    error_code          TEXT,
+    created_at          TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_serving_request_metrics_created_at
+    ON app.serving_request_metrics (created_at);
+CREATE INDEX IF NOT EXISTS idx_serving_request_metrics_model_version
+    ON app.serving_request_metrics (model_version, created_at);
+CREATE INDEX IF NOT EXISTS idx_serving_request_metrics_fallback_state
+    ON app.serving_request_metrics (fallback_state, created_at);
+
+CREATE TABLE IF NOT EXISTS app.serving_metric_rollups (
+    rollup_id               TEXT PRIMARY KEY,
+    window_name             TEXT NOT NULL,
+    window_start            TIMESTAMPTZ NOT NULL,
+    window_end              TIMESTAMPTZ NOT NULL,
+    model_version           TEXT,
+    request_count           INT NOT NULL DEFAULT 0,
+    error_rate              DOUBLE PRECISION NOT NULL DEFAULT 0,
+    fallback_rate           DOUBLE PRECISION NOT NULL DEFAULT 0,
+    p50_latency_ms          DOUBLE PRECISION NOT NULL DEFAULT 0,
+    p95_latency_ms          DOUBLE PRECISION NOT NULL DEFAULT 0,
+    avg_returned_count      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    catalog_failure_count   INT NOT NULL DEFAULT 0,
+    stream_failure_count    INT NOT NULL DEFAULT 0,
+    completion_rate         DOUBLE PRECISION NOT NULL DEFAULT 0,
+    skip_rate               DOUBLE PRECISION NOT NULL DEFAULT 0,
+    dislike_rate            DOUBLE PRECISION NOT NULL DEFAULT 0,
+    top_artist_share        DOUBLE PRECISION NOT NULL DEFAULT 0,
+    repeat_violation_count  INT NOT NULL DEFAULT 0,
+    sample_status           TEXT NOT NULL DEFAULT 'insufficient',
+    metrics_json            JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at              TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_serving_metric_rollups_window
+    ON app.serving_metric_rollups (window_name, window_end DESC);
+CREATE INDEX IF NOT EXISTS idx_serving_metric_rollups_model_version
+    ON app.serving_metric_rollups (model_version, window_end DESC);
+
+CREATE TABLE IF NOT EXISTS app.model_trigger_decisions (
+    decision_id      TEXT PRIMARY KEY,
+    decision_type    TEXT NOT NULL,
+    model_version    TEXT,
+    decision         TEXT NOT NULL,
+    reason           TEXT,
+    metrics_json     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    thresholds_json  JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at       TIMESTAMPTZ DEFAULT now(),
+    executed         BOOLEAN NOT NULL DEFAULT false,
+    execution_note   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_trigger_decisions_type_created
+    ON app.model_trigger_decisions (decision_type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_model_trigger_decisions_model_version
+    ON app.model_trigger_decisions (model_version, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS app.model_versions (
+    model_version           TEXT PRIMARY KEY,
+    serving_bundle_version  TEXT,
+    manifest_uri            TEXT,
+    status                  TEXT NOT NULL DEFAULT 'candidate',
+    is_active               BOOLEAN NOT NULL DEFAULT false,
+    activated_at            TIMESTAMPTZ,
+    deactivated_at          TIMESTAMPTZ,
+    rollback_parent_version TEXT,
+    created_at              TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_versions_single_active
+    ON app.model_versions (is_active)
+    WHERE is_active;
+CREATE INDEX IF NOT EXISTS idx_model_versions_status
+    ON app.model_versions (status, created_at DESC);
 
 -- Delta export watermarks
 CREATE TABLE IF NOT EXISTS app.delta_checkpoint (

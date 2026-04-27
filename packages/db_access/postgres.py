@@ -475,25 +475,27 @@ class PostgresRepository:
     def get_model_status(self) -> Dict[str, Any]:
         with self._connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT degraded, reason, updated_at FROM app.model_status WHERE id = 1")
+                cur.execute("SELECT degraded, reason, action, updated_at FROM app.model_status WHERE id = 1")
                 row = cur.fetchone()
                 if not row:
-                    return {"degraded": False, "reason": None}
-                return {"degraded": row[0], "reason": row[1], "updated_at": row[2]}
+                    return {"degraded": False, "reason": None, "action": "normal"}
+                return {"degraded": row[0], "reason": row[1], "action": row[2] or "normal", "updated_at": row[3]}
 
-    def upsert_model_status(self, degraded: bool, reason: Optional[str] = None) -> None:
+    def upsert_model_status(self, degraded: bool, reason: Optional[str] = None, action: str = "normal") -> None:
+        action = action if action in {"normal", "fallback_only"} else "normal"
         with self._connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO app.model_status (id, degraded, reason, updated_at)
-                    VALUES (1, %s, %s, NOW())
+                    INSERT INTO app.model_status (id, degraded, reason, action, updated_at)
+                    VALUES (1, %s, %s, %s, NOW())
                     ON CONFLICT (id) DO UPDATE SET
                         degraded = EXCLUDED.degraded,
                         reason = EXCLUDED.reason,
+                        action = EXCLUDED.action,
                         updated_at = NOW()
                     """,
-                    (degraded, reason),
+                    (degraded, reason, action),
                 )
 
     # ------------------------------------------------------------------ #
@@ -557,11 +559,16 @@ class PostgresRepository:
                         "rows_exported": row[3],
                     }
 
-                cur.execute("SELECT degraded, reason, updated_at FROM app.model_status WHERE id = 1")
+                cur.execute("SELECT degraded, reason, action, updated_at FROM app.model_status WHERE id = 1")
                 row = cur.fetchone()
-                model_status = {"degraded": False, "reason": None}
+                model_status = {"degraded": False, "reason": None, "action": "normal"}
                 if row:
-                    model_status = {"degraded": row[0], "reason": row[1]}
+                    model_status = {
+                        "degraded": row[0],
+                        "reason": row[1],
+                        "action": row[2] or "normal",
+                        "updated_at": row[3].isoformat() if row[3] else None,
+                    }
 
                 cur.execute("SELECT COUNT(*) FROM app.users")
                 user_count = cur.fetchone()[0]
@@ -574,6 +581,12 @@ class PostgresRepository:
                     "model_status": model_status,
                     "user_count": user_count,
                     "finalized_playback_events": finalized_events,
+                    "active_model_version": self.get_active_model_version(),
+                    "previous_good_model_version": self.get_previous_good_model_version(),
+                    "latest_rollup_5m": self.latest_serving_metric_rollup("5m"),
+                    "latest_rollup_1h": self.latest_serving_metric_rollup("1h"),
+                    "latest_rollback_decision": self.latest_model_trigger_decision("rollback_check"),
+                    "latest_promotion_decision": self.latest_model_trigger_decision("promotion_gate"),
                 }
 
     # ------------------------------------------------------------------ #
@@ -643,19 +656,334 @@ class PostgresRepository:
         pass
 
     def record_serving_request_metric(self, payload: Dict[str, Any]) -> None:
-        pass
+        import uuid
+
+        metric = dict(payload)
+        metric.setdefault("metric_id", f"metric_{uuid.uuid4().hex}")
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.serving_request_metrics (
+                        metric_id, request_id, session_id, user_id, model_version,
+                        fallback_level, fallback_state, candidate_count, playable_count,
+                        returned_count, pipeline_latency_ms, total_latency_ms,
+                        pipeline_error, error_code, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, NOW()))
+                    ON CONFLICT (metric_id) DO NOTHING
+                    """,
+                    (
+                        str(metric["metric_id"]),
+                        metric.get("request_id"),
+                        metric.get("session_id"),
+                        metric.get("user_id"),
+                        metric.get("model_version"),
+                        metric.get("fallback_level", "none"),
+                        metric.get("fallback_state", "healthy"),
+                        int(metric.get("candidate_count") or 0),
+                        int(metric.get("playable_count") or 0),
+                        int(metric.get("returned_count") or 0),
+                        float(metric.get("pipeline_latency_ms") or 0),
+                        float(metric.get("total_latency_ms") or 0),
+                        bool(metric.get("pipeline_error", False)),
+                        metric.get("error_code"),
+                        metric.get("created_at"),
+                    ),
+                )
+
+    def get_monitoring_inputs(self, window_start: datetime, window_end: datetime) -> Dict[str, List[Dict[str, Any]]]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT metric_id, request_id, session_id, user_id, model_version,
+                           fallback_level, fallback_state, candidate_count, playable_count,
+                           returned_count, pipeline_latency_ms, total_latency_ms,
+                           pipeline_error, error_code, created_at
+                    FROM app.serving_request_metrics
+                    WHERE created_at >= %s AND created_at <= %s
+                    ORDER BY created_at
+                    """,
+                    (window_start, window_end),
+                )
+                request_metrics = [
+                    {
+                        "metric_id": row[0],
+                        "request_id": row[1],
+                        "session_id": row[2],
+                        "user_id": row[3],
+                        "model_version": row[4],
+                        "fallback_level": row[5],
+                        "fallback_state": row[6],
+                        "candidate_count": row[7],
+                        "playable_count": row[8],
+                        "returned_count": row[9],
+                        "pipeline_latency_ms": row[10],
+                        "total_latency_ms": row[11],
+                        "pipeline_error": row[12],
+                        "error_code": row[13],
+                        "created_at": row[14],
+                    }
+                    for row in cur.fetchall()
+                ]
+                cur.execute(
+                    """
+                    SELECT event_id, session_int_id, user_int_id, track_id, position,
+                           playratio, event_type, created_at
+                    FROM app.playback_events
+                    WHERE created_at >= %s AND created_at <= %s
+                    ORDER BY created_at
+                    """,
+                    (window_start, window_end),
+                )
+                playback_events = [
+                    {
+                        "event_id": row[0],
+                        "session_int_id": row[1],
+                        "user_int_id": row[2],
+                        "track_id": row[3],
+                        "position": row[4],
+                        "playratio": row[5],
+                        "event_type": row[6],
+                        "created_at": row[7],
+                    }
+                    for row in cur.fetchall()
+                ]
+        return {
+            "request_metrics": request_metrics,
+            "recommendation_impressions": [],
+            "rendered_impressions": [],
+            "playback_events": playback_events,
+            "feedback_events": [],
+        }
+
+    def write_serving_metric_rollup(self, payload: Dict[str, Any]) -> None:
+        from psycopg2.extras import Json
+
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.serving_metric_rollups (
+                        rollup_id, window_name, window_start, window_end, model_version,
+                        request_count, error_rate, fallback_rate, p50_latency_ms,
+                        p95_latency_ms, avg_returned_count, catalog_failure_count,
+                        stream_failure_count, completion_rate, skip_rate, dislike_rate,
+                        top_artist_share, repeat_violation_count, sample_status,
+                        metrics_json, created_at
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, COALESCE(%s, NOW()))
+                    ON CONFLICT (rollup_id) DO NOTHING
+                    """,
+                    (
+                        payload["rollup_id"],
+                        payload["window_name"],
+                        payload["window_start"],
+                        payload["window_end"],
+                        payload.get("model_version"),
+                        int(payload.get("request_count") or 0),
+                        float(payload.get("error_rate") or 0),
+                        float(payload.get("fallback_rate") or 0),
+                        float(payload.get("p50_latency_ms") or 0),
+                        float(payload.get("p95_latency_ms") or 0),
+                        float(payload.get("avg_returned_count") or 0),
+                        int(payload.get("catalog_failure_count") or 0),
+                        int(payload.get("stream_failure_count") or 0),
+                        float(payload.get("completion_rate") or 0),
+                        float(payload.get("skip_rate") or 0),
+                        float(payload.get("dislike_rate") or 0),
+                        float(payload.get("top_artist_share") or 0),
+                        int(payload.get("repeat_violation_count") or 0),
+                        payload.get("sample_status", "insufficient"),
+                        Json(payload.get("metrics_json") or {}),
+                        payload.get("created_at"),
+                    ),
+                )
 
     def get_active_model_version(self) -> Optional[Dict[str, Any]]:
-        return None
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT model_version, serving_bundle_version, manifest_uri, status,
+                           is_active, activated_at, deactivated_at, rollback_parent_version
+                    FROM app.model_versions
+                    WHERE is_active = TRUE
+                    ORDER BY activated_at DESC NULLS LAST LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+                return self._model_version_row(row) if row else None
+
+    def get_previous_good_model_version(self) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT model_version, serving_bundle_version, manifest_uri, status,
+                           is_active, activated_at, deactivated_at, rollback_parent_version
+                    FROM app.model_versions
+                    WHERE status = 'previous_good'
+                    ORDER BY deactivated_at DESC NULLS LAST, created_at DESC LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+                return self._model_version_row(row) if row else None
 
     def latest_serving_metric_rollup(self, window_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        return None
+        where = "WHERE window_name = %s" if window_name else ""
+        params = (window_name,) if window_name else ()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT rollup_id, window_name, window_start, window_end, model_version,
+                           request_count, error_rate, fallback_rate, p50_latency_ms,
+                           p95_latency_ms, avg_returned_count, catalog_failure_count,
+                           stream_failure_count, completion_rate, skip_rate, dislike_rate,
+                           top_artist_share, repeat_violation_count, sample_status,
+                           metrics_json, created_at
+                    FROM app.serving_metric_rollups
+                    {where}
+                    ORDER BY window_end DESC, created_at DESC LIMIT 1
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "rollup_id": row[0],
+                    "window_name": row[1],
+                    "window_start": row[2].isoformat() if row[2] else None,
+                    "window_end": row[3].isoformat() if row[3] else None,
+                    "model_version": row[4],
+                    "request_count": row[5],
+                    "error_rate": row[6],
+                    "fallback_rate": row[7],
+                    "p50_latency_ms": row[8],
+                    "p95_latency_ms": row[9],
+                    "avg_returned_count": row[10],
+                    "catalog_failure_count": row[11],
+                    "stream_failure_count": row[12],
+                    "completion_rate": row[13],
+                    "skip_rate": row[14],
+                    "dislike_rate": row[15],
+                    "top_artist_share": row[16],
+                    "repeat_violation_count": row[17],
+                    "sample_status": row[18],
+                    "metrics_json": row[19] or {},
+                    "created_at": row[20].isoformat() if row[20] else None,
+                }
 
     def latest_model_trigger_decision(self, decision_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        return None
+        where = "WHERE decision_type = %s" if decision_type else ""
+        params = (decision_type,) if decision_type else ()
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT decision_id, decision_type, model_version, decision, reason,
+                           metrics_json, thresholds_json, created_at, executed, execution_note
+                    FROM app.model_trigger_decisions
+                    {where}
+                    ORDER BY created_at DESC LIMIT 1
+                    """,
+                    params,
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "decision_id": row[0],
+                    "decision_type": row[1],
+                    "model_version": row[2],
+                    "decision": row[3],
+                    "reason": row[4],
+                    "metrics_json": row[5] or {},
+                    "thresholds_json": row[6] or {},
+                    "created_at": row[7].isoformat() if row[7] else None,
+                    "executed": row[8],
+                    "execution_note": row[9],
+                }
+
+    def record_model_trigger_decision(self, payload: Dict[str, Any]) -> None:
+        from psycopg2.extras import Json
+        import uuid
+
+        decision = dict(payload)
+        decision.setdefault("decision_id", f"decision_{uuid.uuid4().hex}")
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO app.model_trigger_decisions (
+                        decision_id, decision_type, model_version, decision, reason,
+                        metrics_json, thresholds_json, created_at, executed, execution_note
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, COALESCE(%s, NOW()), %s, %s)
+                    ON CONFLICT (decision_id) DO NOTHING
+                    """,
+                    (
+                        decision["decision_id"],
+                        decision["decision_type"],
+                        decision.get("model_version"),
+                        decision["decision"],
+                        decision.get("reason"),
+                        Json(decision.get("metrics_json") or {}),
+                        Json(decision.get("thresholds_json") or {}),
+                        decision.get("created_at"),
+                        bool(decision.get("executed", False)),
+                        decision.get("execution_note"),
+                    ),
+                )
 
     def register_active_model_version(self, model_version: str, serving_bundle_version: str, manifest_uri: str) -> None:
-        pass
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT model_version FROM app.model_versions WHERE is_active = TRUE LIMIT 1")
+                current = cur.fetchone()
+                parent = current[0] if current and current[0] != model_version else None
+                if parent:
+                    cur.execute(
+                        """
+                        UPDATE app.model_versions
+                        SET is_active = FALSE, status = 'previous_good', deactivated_at = NOW()
+                        WHERE is_active = TRUE
+                        """
+                    )
+                cur.execute(
+                    """
+                    INSERT INTO app.model_versions (
+                        model_version, serving_bundle_version, manifest_uri, status,
+                        is_active, activated_at, rollback_parent_version
+                    )
+                    VALUES (%s, %s, %s, 'active', TRUE, NOW(), %s)
+                    ON CONFLICT (model_version) DO UPDATE SET
+                        serving_bundle_version = EXCLUDED.serving_bundle_version,
+                        manifest_uri = EXCLUDED.manifest_uri,
+                        status = 'active',
+                        is_active = TRUE,
+                        activated_at = NOW(),
+                        deactivated_at = NULL,
+                        rollback_parent_version = EXCLUDED.rollback_parent_version
+                    """,
+                    (model_version, serving_bundle_version, manifest_uri, parent),
+                )
 
     def seed_demo_state(self, user_id: str, session_id: str) -> None:
         pass
+
+    @staticmethod
+    def _model_version_row(row) -> Dict[str, Any]:
+        return {
+            "model_version": row[0],
+            "serving_bundle_version": row[1],
+            "manifest_uri": row[2],
+            "status": row[3],
+            "is_active": row[4],
+            "activated_at": row[5].isoformat() if row[5] else None,
+            "deactivated_at": row[6].isoformat() if row[6] else None,
+            "rollback_parent_version": row[7],
+        }

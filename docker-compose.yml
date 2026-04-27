@@ -195,6 +195,35 @@ services:
       recommendation-api:
         condition: service_started
 
+  serving-monitor-worker:
+    <<: *recommendation-runtime
+    command: ["python", "workers/serving-monitor-worker/rollup_metrics.py", "--loop", "--window", "5m", "--window", "1h", "--print-json"]
+    environment:
+      SPOTIBOYS_RUNTIME_MODE: postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
+      REDIS_URL: redis://redis:6379/0
+      SPOTIBOYS_SERVING_MONITOR_INTERVAL_SECONDS: ${SPOTIBOYS_SERVING_MONITOR_INTERVAL_SECONDS:-300}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      recommendation-api:
+        condition: service_started
+
+  rollback-check-worker:
+    <<: *recommendation-runtime
+    command: ["python", "workers/rollback-check-worker/check_rollback.py", "--window", "5m", "--print-json"]
+    environment:
+      SPOTIBOYS_RUNTIME_MODE: postgres
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/spotiboys
+      REDIS_URL: redis://redis:6379/0
+      SPOTIBOYS_AUTO_ROLLBACK: ${SPOTIBOYS_AUTO_ROLLBACK:-false}
+      SPOTIBOYS_ROLLBACK_MIN_REQUESTS: ${SPOTIBOYS_ROLLBACK_MIN_REQUESTS:-20}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      serving-monitor-worker:
+        condition: service_started
+
   grafana:
     image: grafana/grafana:10.4.2
     ports:
