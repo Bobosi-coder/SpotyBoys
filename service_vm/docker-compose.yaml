@@ -2,18 +2,21 @@ name: spotyboys_training
 
 x-airflow-common: &airflow-common
   image: apache/airflow:2.9.3
+  env_file:
+    - ../.env
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://user:password@postgres/airflowdb
-    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${SERVICE_VM_DB_USER:-user}:${SERVICE_VM_DB_PASSWORD:-password}@postgres/${SERVICE_VM_DB_NAME:-mlflowdb}
+    AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'false'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__WEBSERVER__EXPOSE_CONFIG: 'true'
-    AIRFLOW__WEBSERVER__SECRET_KEY: 'spotyboys-secret-2026'
+    AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-spotyboys-secret-2026}
+    AIRFLOW_CONN_GPU_VM_SSH: ${AIRFLOW_CONN_GPU_VM_SSH:-}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
-    - /home/cc/.ssh/airflow_gpu_key:/opt/airflow/ssh/airflow_gpu_key:ro
+    - ${GPU_VM_SSH_KEY_PATH:-/home/cc/.ssh/airflow_gpu_key}:/opt/airflow/ssh/airflow_gpu_key:ro
   depends_on:
     - postgres
 
@@ -23,9 +26,9 @@ services:
     container_name: postgres
     restart: always
     environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: mlflowdb
+      POSTGRES_USER: ${SERVICE_VM_DB_USER:-user}
+      POSTGRES_PASSWORD: ${SERVICE_VM_DB_PASSWORD:-password}
+      POSTGRES_DB: ${SERVICE_VM_DB_NAME:-mlflowdb}
     ports:
       - "5432:5432"
     volumes:
@@ -38,24 +41,24 @@ services:
     depends_on:
       - postgres
     env_file:
-      - .env
+      - ../.env
     environment:
       MLFLOW_TRACKING_URI: http://0.0.0.0:8000
       MLFLOW_LOGGING_LEVEL: ERROR
       MLFLOW_SERVER_ALLOWED_HOSTS: "*"
-      MLFLOW_S3_ENDPOINT_URL: https://chi.tacc.chameleoncloud.org:7480
+      MLFLOW_S3_ENDPOINT_URL: ${MLFLOW_S3_ENDPOINT_URL:-https://chi.tacc.chameleoncloud.org:7480}
     ports:
       - "8000:8000"
     command: >
       /bin/sh -c "pip install psycopg2-binary boto3 &&
-      mlflow server --backend-store-uri postgresql://user:password@postgres/mlflowdb
-      --artifacts-destination s3://${BUCKET_NAME}/mlflow/ --serve-artifacts --host 0.0.0.0 --port 8000"
+      mlflow server --backend-store-uri postgresql://${SERVICE_VM_DB_USER:-user}:${SERVICE_VM_DB_PASSWORD:-password}@postgres/${SERVICE_VM_DB_NAME:-mlflowdb}
+      --artifacts-destination s3://${BUCKET_NAME:-proj23-mlflow-artifacts}/mlflow/ --serve-artifacts --host 0.0.0.0 --port 8000"
 
   airflow-init:
     <<: *airflow-common
     container_name: airflow-init
     entrypoint: /bin/bash
-    command: -c "pip install apache-airflow-providers-ssh && airflow db migrate && airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true"
+    command: -c "pip install apache-airflow-providers-ssh && airflow db migrate && airflow users create --username ${AIRFLOW_USERNAME:-admin} --password ${AIRFLOW_PASSWORD:-admin} --firstname Admin --lastname User --role Admin --email ${AIRFLOW_EMAIL:-admin@example.com} || true"
     restart: on-failure
 
   airflow-webserver:
