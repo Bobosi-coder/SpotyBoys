@@ -2,6 +2,7 @@ name: spotyboys_training
 
 x-airflow-common: &airflow-common
   image: apache/airflow:2.9.3
+  user: "${AIRFLOW_UID:-50000}:0"
   env_file:
     - ../.env
   environment:
