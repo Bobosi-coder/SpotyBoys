@@ -323,6 +323,38 @@
     },
 
     {
+      "id": 19,
+      "type": "stat",
+      "title": "Total Count (24 h)",
+      "gridPos": { "x": 12, "y": 14, "w": 6, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+          "rawSql": "SELECT COUNT(*) AS value FROM app.playback_events WHERE playratio IS NOT NULL AND created_at >= NOW() - INTERVAL '24 hours'",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
       "id": 15,
       "type": "timeseries",
       "title": "Skip Rate / Completion Rate Over Time (hourly)",
