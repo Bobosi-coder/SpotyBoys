@@ -15,12 +15,13 @@
  import config from '../config'
  
  const useStyles = makeStyles((theme) => ({
-@@ -55,19 +54,14 @@
+@@ -55,19 +54,13 @@
  
    // TODO State is not persisted in mobile when you close the sidebar menu. Move to redux?
    const [state, setState] = useState({
 -    menuAlbumList: true,
      menuPlaylists: true,
+-    menuSharedPlaylists: true,
    })
  
 -  const handleToggle = (menu) => {
@@ -68,7 +69,7 @@
    const subItems = (subMenu) => (resource) =>
      resource.hasList && resource.options && resource.options.subMenu === subMenu
  
-@@ -113,19 +81,9 @@
+@@ -113,32 +81,40 @@
        })}
      >
        {open && <LibrarySelector />}
@@ -91,11 +92,18 @@
        {config.devSidebarPlaylists && open ? (
          <>
            <Divider />
-@@ -139,6 +97,22 @@
+           <PlaylistsSubMenu
+             state={state}
+             setState={setState}
+             sidebarIsOpen={open}
+             dense={dense}
+           />
+         </>
        ) : (
-        resources
-          .filter((resource) => resource.name === 'playlist')
-          .map(renderResourceMenuItemLink)
+-        resources.filter(subItems('playlist')).map(renderResourceMenuItemLink)
++        resources
++          .filter((resource) => resource.name === 'playlist')
++          .map(renderResourceMenuItemLink)
        )}
 +      <MenuItemLink
 +        to={'/song?filter={"starred":true}&order=DESC&sort=starred_at'}
