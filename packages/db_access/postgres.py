@@ -652,8 +652,13 @@ class PostgresRepository:
     def persist_feedback_event(self, event_id: str, payload: Dict[str, Any]) -> bool:
         return True
 
-    def persist_ingestion_rejection(self, event_type: str, reasons: List[str], raw_payload: Dict[str, Any]) -> None:
-        pass
+    def persist_ingestion_rejection(self, source: str, reason: str, raw_ref: str) -> None:
+        with self._connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO app.ingestion_rejections (source, reason, raw_ref) VALUES (%s, %s, %s)",
+                    (source, reason, raw_ref),
+                )
 
     def record_serving_request_metric(self, payload: Dict[str, Any]) -> None:
         import uuid

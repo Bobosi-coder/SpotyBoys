@@ -413,6 +413,11 @@ def _sync_loved_tracks(conn) -> None:
                             """,
                             (user_int_id, track_id),
                         )
+                    else:
+                        cur.execute(
+                            "INSERT INTO app.ingestion_rejections (source, reason, raw_ref) VALUES (%s, %s, %s)",
+                            ("loved_track_sync", "track_not_mapped", nav_id),
+                        )
         except Exception as exc:
             log.debug(f"Failed to sync loved tracks for user {user_int_id}: {exc}")
 
@@ -458,6 +463,11 @@ def _sync_playlists(conn) -> None:
                             cur.execute(
                                 "INSERT INTO app.playlist_tracks (playlist_int_id, position, track_id) VALUES (%s, %s, %s)",
                                 (playlist_int_id, pos, track_id),
+                            )
+                        else:
+                            cur.execute(
+                                "INSERT INTO app.ingestion_rejections (source, reason, raw_ref) VALUES (%s, %s, %s)",
+                                ("playlist_sync", "track_not_mapped", nav_id),
                             )
         except Exception as exc:
             log.debug(f"Failed to sync playlists for user {user_int_id}: {exc}")

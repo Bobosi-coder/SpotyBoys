@@ -477,6 +477,7 @@ def navidrome_playback_event(payload: NavidromePlaybackEventBody, request: Reque
 
     track = repository.get_playable_track_by_navidrome_id(payload.navidrome_track_id)
     if not track:
+        repository.persist_ingestion_rejection("playback_event", "track_not_mapped", payload.navidrome_track_id)
         raise HTTPException(status_code=404, detail="navidrome track is not mapped to a playable SpotyBoys track")
 
     user = repository.get_user_by_id(auth_session.user_id)
