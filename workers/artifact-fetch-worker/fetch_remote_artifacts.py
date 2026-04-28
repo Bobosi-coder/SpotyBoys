@@ -38,6 +38,7 @@ def fetch_remote_artifacts() -> Path:
     print(f"Selected serving bundle prefix {real_service_prefix}", flush=True)
     real_service_dest = _download_prefix(client, real_service_prefix, DEST_ROOT / real_service_prefix.rstrip("/"))
     print(f"Downloaded serving bundle to {real_service_dest}", flush=True)
+    _normalize_serving_manifest(real_service_dest)
     gate_decision = _evaluate_activation_gate(real_service_dest)
     print(
         f"Promotion gate decision={gate_decision.get('decision')} reason={gate_decision.get('reason')}",
