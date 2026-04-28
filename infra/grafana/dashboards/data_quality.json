@@ -484,7 +484,7 @@
       "id": 24,
       "type": "table",
       "title": "Delta Export History",
-      "gridPos": { "x": 12, "y": 27, "w": 12, "h": 6 },
+      "gridPos": { "x": 0, "y": 31, "w": 24, "h": 6 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "options": { "sortBy": [{ "displayName": "exported_at", "desc": true }] },
       "fieldConfig": {
@@ -510,7 +510,7 @@
       "id": 25,
       "type": "timeseries",
       "title": "Session Accumulation Over Time",
-      "gridPos": { "x": 0, "y": 33, "w": 12, "h": 5 },
+      "gridPos": { "x": 0, "y": 37, "w": 12, "h": 5 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "fieldConfig": {
         "defaults": {
@@ -532,7 +532,7 @@
       "id": 26,
       "type": "timeseries",
       "title": "Unique Users & Tracks Seen (hourly)",
-      "gridPos": { "x": 12, "y": 33, "w": 12, "h": 5 },
+      "gridPos": { "x": 12, "y": 37, "w": 12, "h": 5 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "fieldConfig": {
         "defaults": {
