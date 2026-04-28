@@ -17,7 +17,7 @@
       "gridPos": { "x": 0, "y": 0, "w": 24, "h": 2 },
       "options": {
         "mode": "markdown",
-        "content": "## ① Ingestion Quality Gate\nTracks from Navidrome (external source) that could not be mapped to the 30Music catalog during delta-export-worker sync. Logged per sync cycle (every 24 h)."
+        "content": "Tracks from Navidrome (external source) that could not be mapped to the 30Music catalog during delta-export-worker sync. Logged per sync cycle (every 24 h)."
       }
     },
 
@@ -259,10 +259,74 @@
     },
 
     {
+      "id": 17,
+      "type": "stat",
+      "title": "Skip Count (24 h)",
+      "gridPos": { "x": 0, "y": 14, "w": 6, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+          "rawSql": "SELECT COUNT(*) AS value FROM app.playback_events WHERE event_type = 'skip' AND created_at >= NOW() - INTERVAL '24 hours'",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 18,
+      "type": "stat",
+      "title": "Complete Count (24 h)",
+      "gridPos": { "x": 6, "y": 14, "w": 6, "h": 4 },
+      "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "colorMode": "background",
+        "graphMode": "none",
+        "textMode": "auto",
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "blue", "value": null }]
+          },
+          "color": { "mode": "thresholds" }
+        }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
+          "rawSql": "SELECT COUNT(*) AS value FROM app.playback_events WHERE event_type = 'complete' AND created_at >= NOW() - INTERVAL '24 hours'",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
       "id": 15,
       "type": "timeseries",
       "title": "Skip Rate / Completion Rate Over Time (hourly)",
-      "gridPos": { "x": 0, "y": 14, "w": 14, "h": 6 },
+      "gridPos": { "x": 0, "y": 18, "w": 14, "h": 6 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "fieldConfig": {
         "defaults": {
@@ -286,7 +350,7 @@
       "id": 16,
       "type": "timeseries",
       "title": "Playback Event Volume Over Time (hourly)",
-      "gridPos": { "x": 14, "y": 14, "w": 10, "h": 6 },
+      "gridPos": { "x": 14, "y": 18, "w": 10, "h": 6 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "fieldConfig": {
         "defaults": {
@@ -309,7 +373,7 @@
       "id": 20,
       "type": "text",
       "title": "③ Training Data Quality Gate",
-      "gridPos": { "x": 0, "y": 20, "w": 24, "h": 2 },
+      "gridPos": { "x": 0, "y": 24, "w": 24, "h": 2 },
       "options": {
         "mode": "markdown",
         "content": "Delta export history and session accumulation toward the next retraining trigger (threshold: 1,000 sessions)."
@@ -320,7 +384,7 @@
       "id": 21,
       "type": "stat",
       "title": "Total Sessions",
-      "gridPos": { "x": 0, "y": 23, "w": 4, "h": 4 },
+      "gridPos": { "x": 0, "y": 27, "w": 4, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -352,7 +416,7 @@
       "id": 22,
       "type": "stat",
       "title": "Sessions Since Last Export",
-      "gridPos": { "x": 4, "y": 23, "w": 4, "h": 4 },
+      "gridPos": { "x": 4, "y": 27, "w": 4, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -388,7 +452,7 @@
       "id": 23,
       "type": "stat",
       "title": "Delta Exports Completed",
-      "gridPos": { "x": 8, "y": 23, "w": 4, "h": 4 },
+      "gridPos": { "x": 8, "y": 27, "w": 4, "h": 4 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "options": {
         "reduceOptions": { "calcs": ["lastNotNull"] },
@@ -420,7 +484,7 @@
       "id": 24,
       "type": "table",
       "title": "Delta Export History",
-      "gridPos": { "x": 12, "y": 23, "w": 12, "h": 6 },
+      "gridPos": { "x": 12, "y": 27, "w": 12, "h": 6 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "options": { "sortBy": [{ "displayName": "exported_at", "desc": true }] },
       "fieldConfig": {
@@ -446,7 +510,7 @@
       "id": 25,
       "type": "timeseries",
       "title": "Session Accumulation Over Time",
-      "gridPos": { "x": 0, "y": 27, "w": 12, "h": 5 },
+      "gridPos": { "x": 0, "y": 33, "w": 12, "h": 5 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "fieldConfig": {
         "defaults": {
@@ -468,7 +532,7 @@
       "id": 26,
       "type": "timeseries",
       "title": "Unique Users & Tracks Seen (hourly)",
-      "gridPos": { "x": 12, "y": 27, "w": 12, "h": 5 },
+      "gridPos": { "x": 12, "y": 33, "w": 12, "h": 5 },
       "datasource": { "type": "postgres", "uid": "spotiboys-pg" },
       "fieldConfig": {
         "defaults": {
