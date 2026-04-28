@@ -21,7 +21,6 @@
    const [state, setState] = useState({
 -    menuAlbumList: true,
      menuPlaylists: true,
-     menuSharedPlaylists: true,
    })
  
 -  const handleToggle = (menu) => {
@@ -94,7 +93,9 @@
            <Divider />
 @@ -139,6 +97,22 @@
        ) : (
-         resources.filter(subItems('playlist')).map(renderResourceMenuItemLink)
+        resources
+          .filter((resource) => resource.name === 'playlist')
+          .map(renderResourceMenuItemLink)
        )}
 +      <MenuItemLink
 +        to={'/song?filter={"starred":true}&order=DESC&sort=starred_at'}
