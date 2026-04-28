@@ -8,6 +8,7 @@ COPY packages/ /app/packages/
 COPY src/ /app/src/
 COPY fixtures/ /app/fixtures/
 COPY infra/ /app/infra/
+COPY jobs/ /app/jobs/
 COPY workers/ /app/workers/
 COPY scripts/ /app/scripts/
 COPY apps/recommendation-api/ /app/apps/recommendation-api/
