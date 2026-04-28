@@ -24,6 +24,7 @@ import logging
 import os
 import sys
 import time
+import uuid
 
 import boto3
 import mlflow
@@ -39,6 +40,15 @@ EXPERIMENT_PHASE1 = "training before online service"
 EXPERIMENT_PHASE2 = "retraining after online service"
 
 COMPOSITE_WEIGHTS = {"NDCG5": 0.5, "HR5": 0.3, "MRR5": 0.2}
+SERVING_ARTIFACTS = [
+    "gru_ranker.pt",
+    "gru_ranker_config.json",
+    "cooc_session.npz",
+    "cooc_playlist.npz",
+    "user_centroids.pkl",
+    "pop_scores.csv",
+    "manifest.json",
+]
 
 log = logging.getLogger("promote")
 
@@ -100,6 +110,44 @@ def refresh_service_bundle() -> dict:
 
 def composite_score(metrics: dict) -> float:
     return sum(w * metrics.get(k, 0.0) for k, w in COMPOSITE_WEIGHTS.items())
+
+
+def build_promotion_decision(
+    *,
+    version: str,
+    score: float,
+    metrics: dict,
+    baseline: dict,
+    threshold_composite: float,
+    threshold_val_loss: float,
+) -> dict:
+    return {
+        "decision_id": f"promotion_{uuid.uuid4().hex}",
+        "model_version": version,
+        "decision": "approved",
+        "reason": "offline_metrics_passed",
+        "offline_metrics": {
+            "candidate": {
+                "composite": round(score, 6),
+                "val_loss": round(metrics.get("val_loss", 0), 6),
+                "NDCG5": round(metrics.get("NDCG5", 0), 6),
+                "HR5": round(metrics.get("HR5", 0), 6),
+                "MRR5": round(metrics.get("MRR5", 0), 6),
+            },
+            "baseline": {
+                "composite": round(baseline.get("composite", 0), 6),
+                "val_loss": round(baseline.get("val_loss", 0), 6),
+                "version": baseline.get("version"),
+                "run_id": baseline.get("run_id"),
+            },
+        },
+        "thresholds": {
+            "min_composite": round(threshold_composite, 6),
+            "max_val_loss": round(threshold_val_loss, 6),
+        },
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "bundle_path": f"s3://{BUCKET}/Real_service/{version}/",
+    }
 
 
 # ── MLflow helpers ────────────────────────────────────────────────────────────
@@ -171,6 +219,7 @@ def main() -> None:
     metrics = run.data.metrics
     params  = run.data.params
     score   = composite_score(metrics)
+    promotion_decision = None
 
     log.info(f"Best run: {run_id}")
     log.info(f"  composite={score:.4f}  NDCG5={metrics.get('NDCG5',0):.4f}"
@@ -198,6 +247,14 @@ def main() -> None:
                 f"  or val_loss={metrics.get('val_loss',999):.4f} > {threshold_val_loss:.4f}"
             )
             sys.exit(1)
+        promotion_decision = build_promotion_decision(
+            version=version,
+            score=score,
+            metrics=metrics,
+            baseline=baseline,
+            threshold_composite=threshold_composite,
+            threshold_val_loss=threshold_val_loss,
+        )
         log.info("Promotion gate PASSED.")
 
     # ── Download ranker artifacts from MLflow ─────────────────────────────────
@@ -239,9 +296,14 @@ def main() -> None:
         "params":            params,
         "promoted_at":       time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "mode":              args.mode,
+        "model_version":     version,
+        "artifacts":         SERVING_ARTIFACTS,
     }
     s3_upload_bytes(s3, json.dumps(manifest, indent=2).encode(),
                     f"{dst_prefix}/manifest.json")
+    if promotion_decision is not None:
+        s3_upload_bytes(s3, json.dumps(promotion_decision, indent=2).encode(),
+                        f"{dst_prefix}/promotion_decision.json")
 
     # ── Save / update baseline.json (manual mode) ─────────────────────────────
     if args.mode == "manual":
