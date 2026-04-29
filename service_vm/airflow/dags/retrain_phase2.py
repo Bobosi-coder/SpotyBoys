@@ -32,13 +32,15 @@ with DAG(
         # and read it back so Airflow still sees success/failure correctly.
         command="""
             cd ~/SpotyBoys &&
-            mkdir -p logs &&
+            mkdir -p ~/SpotyBoys/logs &&
             RETRAIN_RC=~/SpotyBoys/logs/.retrain_phase2_rc &&
+            RETRAIN_LOG=~/SpotyBoys/logs/retrain_phase2_airflow.log &&
             rm -f "$RETRAIN_RC" &&
             nohup bash -c '
+                cd ~/SpotyBoys
                 docker compose run --rm training bash scripts/retrain.sh --phase2
                 echo $? > '"$RETRAIN_RC"'
-            ' >> logs/retrain_phase2_airflow.log 2>&1 &
+            ' >> "$RETRAIN_LOG" 2>&1 &
             BGPID=$!
             echo "Training started in background (pid=$BGPID)"
             wait $BGPID || true
