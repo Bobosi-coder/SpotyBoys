@@ -29,7 +29,7 @@ with DAG(
         ssh_conn_id="gpu_vm_ssh",
         command="""
             cd ~/SpotyBoys &&
-            docker-compose run --rm training bash scripts/retrain.sh --phase2
+            docker compose run --rm training bash scripts/retrain.sh --phase2
         """,
         conn_timeout=30,
         cmd_timeout=7200,   # 最多跑 2 小时
