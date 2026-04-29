@@ -47,5 +47,4 @@ with DAG(
         """,
         conn_timeout=60,
         cmd_timeout=21600,  # 6 小时上限（下载数据 + 训练 + promote）
-        keepalive_interval=60,  # SSH keepalive 每 60 秒发一次，防止连接超时断开
     )
