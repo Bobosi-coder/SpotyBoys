@@ -29,6 +29,7 @@ COPY patches/ /patches/
 RUN patch -p1 src/routes.jsx                   < /patches/routes.jsx.patch \
  && patch -p1 src/App.jsx                       < /patches/App.jsx.patch \
  && patch -p1 src/layout/Menu.jsx               < /patches/layout/Menu.jsx.patch \
+ && patch -p1 src/layout/PlaylistsSubMenu.jsx    < /patches/layout/PlaylistsSubMenu.jsx.patch \
  && patch -p1 src/reducers/playerReducer.js     < /patches/reducers/playerReducer.js.patch
 
 # 3. Install dependencies and build

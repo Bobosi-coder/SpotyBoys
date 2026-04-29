@@ -1,0 +1,11 @@
+--- a/ui/src/layout/PlaylistsSubMenu.jsx
++++ b/ui/src/layout/PlaylistsSubMenu.jsx
+@@ -70,8 +70,6 @@
+     allPlaylists.forEach((pls) => {
+       if (userId === pls.ownerId) {
+         myPlaylists.push(pls)
+-      } else {
+-        sharedPlaylists.push(pls)
+       }
+     })
+   }
