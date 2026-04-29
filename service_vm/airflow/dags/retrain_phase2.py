@@ -27,10 +27,25 @@ with DAG(
     run_retrain = SSHOperator(
         task_id="run_retrain_phase2",
         ssh_conn_id="gpu_vm_ssh",
+        # nohup detaches the training process from the SSH session so it
+        # survives any connection drop.  We write the exit code to a file
+        # and read it back so Airflow still sees success/failure correctly.
         command="""
             cd ~/SpotyBoys &&
-            docker compose run --rm training bash scripts/retrain.sh --phase2
+            mkdir -p logs &&
+            RETRAIN_RC=~/SpotyBoys/logs/.retrain_phase2_rc &&
+            rm -f "$RETRAIN_RC" &&
+            nohup bash -c '
+                docker compose run --rm training bash scripts/retrain.sh --phase2
+                echo $? > '"$RETRAIN_RC"'
+            ' >> logs/retrain_phase2_airflow.log 2>&1 &
+            BGPID=$!
+            echo "Training started in background (pid=$BGPID)"
+            wait $BGPID || true
+            RC=$(cat "$RETRAIN_RC" 2>/dev/null || echo 1)
+            exit $RC
         """,
-        conn_timeout=30,
-        cmd_timeout=7200,   # 最多跑 2 小时
+        conn_timeout=60,
+        cmd_timeout=21600,  # 6 小时上限（下载数据 + 训练 + promote）
+        keepalive_interval=60,  # SSH keepalive 每 60 秒发一次，防止连接超时断开
     )
