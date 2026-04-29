@@ -40,7 +40,7 @@ def run(
         .column("session_id")
         .to_pylist()
     )
-    session_ids = np.array(session_ids, dtype=np.int64)
+    session_ids = np.unique(np.array(session_ids, dtype=np.int64))
     n_total = len(session_ids)
     log.info(f"Total sessions: {n_total:,}")
 
