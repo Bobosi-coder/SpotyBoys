@@ -104,9 +104,9 @@ class LoadTestStats:
 # Auth
 # ------------------------------------------------------------------ #
 
-def authenticate(base_url: str, email: str, password: str) -> requests.Session:
-    session = requests.Session()
-    resp = session.post(
+def authenticate(base_url: str, email: str, password: str) -> tuple[str, str]:
+    """Login and return (token, user_id)."""
+    resp = requests.post(
         f"{base_url}/spotiboys/auth/login",
         json={"email": email, "password": password},
         timeout=15,
@@ -116,10 +116,28 @@ def authenticate(base_url: str, email: str, password: str) -> requests.Session:
         sys.exit(1)
     data = resp.json()
     token = data.get("token", "")
-    if token:
-        session.headers["Authorization"] = f"Bearer {token}"
+    if not token:
+        print(f"[ERROR] Login succeeded but no token in response: {data}", file=sys.stderr)
+        sys.exit(1)
     print(f"[OK] Authenticated as {email} (user_id={data.get('user_id', '?')})")
-    return session
+    print(f"[OK] Token: {token[:12]}...")
+
+    # Sanity check: verify a single bootstrap call works
+    print("[CHECK] Testing /session/bootstrap with token ...")
+    test_session = requests.Session()
+    test_session.cookies.set("spotiboys_token", token)
+    try:
+        test_resp = test_session.get(f"{base_url}/session/bootstrap", timeout=15)
+        print(f"[CHECK] Bootstrap returned: {test_resp.status_code}")
+        if test_resp.status_code == 200:
+            print(f"[CHECK] Response keys: {list(test_resp.json().keys())}")
+        else:
+            print(f"[CHECK] Response body: {test_resp.text[:300]}")
+            print("[WARNING] Bootstrap failed — load test will likely have errors", file=sys.stderr)
+    except Exception as exc:
+        print(f"[CHECK] Bootstrap exception: {exc}", file=sys.stderr)
+
+    return token, data.get("user_id", "")
 
 
 # ------------------------------------------------------------------ #
@@ -129,16 +147,14 @@ def authenticate(base_url: str, email: str, password: str) -> requests.Session:
 def worker(
     worker_id: int,
     base_url: str,
-    cookie_jar: dict,
     token: str,
     duration_seconds: int,
     stats: LoadTestStats,
     stop_event: threading.Event,
 ) -> None:
     session = requests.Session()
-    session.cookies.update(cookie_jar)
-    if token:
-        session.headers["Authorization"] = f"Bearer {token}"
+    # Set the spotiboys_token cookie — this is what nginx reads for auth
+    session.cookies.set("spotiboys_token", token)
 
     deadline = time.monotonic() + duration_seconds
     iteration = 0
@@ -241,10 +257,8 @@ def main() -> None:
     print(f"  Started:   {datetime.now(timezone.utc).isoformat()}")
     print("=" * 60)
 
-    # Authenticate to get cookie + token
-    auth_session = authenticate(args.base_url, args.email, args.password)
-    cookie_jar = dict(auth_session.cookies)
-    token = auth_session.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    # Authenticate to get token
+    token, user_id = authenticate(args.base_url, args.email, args.password)
 
     stats = LoadTestStats()
     stop_event = threading.Event()
@@ -256,19 +270,26 @@ def main() -> None:
     for i in range(args.users):
         t = threading.Thread(
             target=worker,
-            args=(i, args.base_url, cookie_jar, token, args.duration_seconds, stats, stop_event),
+            args=(i, args.base_url, token, args.duration_seconds, stats, stop_event),
             daemon=True,
         )
         threads.append(t)
         t.start()
 
     # Progress reporting
+    first_error_printed = False
     try:
         while time.monotonic() - t_start < args.duration_seconds:
             time.sleep(10)
             elapsed = int(time.monotonic() - t_start)
-            count = len(stats.results)
-            errors = len([r for r in stats.results if r.error or r.status_code >= 400])
+            with stats.lock:
+                count = len(stats.results)
+                errors = len([r for r in stats.results if r.error or r.status_code >= 400])
+                if not first_error_printed:
+                    first_err = next((r for r in stats.results if r.error), None)
+                    if first_err:
+                        print(f"  [DEBUG] First error: {first_err.error}")
+                        first_error_printed = True
             print(f"  [{elapsed:>4}s] requests={count}  errors={errors}")
     except KeyboardInterrupt:
         print("\n[INTERRUPTED] Stopping workers ...")
