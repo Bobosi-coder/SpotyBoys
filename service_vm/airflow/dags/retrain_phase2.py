@@ -45,6 +45,10 @@ with DAG(
             echo "Training started in background (pid=$BGPID)"
             wait $BGPID || true
             RC=$(cat "$RETRAIN_RC" 2>/dev/null || echo 1)
+            if [ "$RC" -ne 0 ]; then
+                echo "Training failed with exit code $RC. Last 200 lines from $RETRAIN_LOG:"
+                tail -n 200 "$RETRAIN_LOG" || true
+            fi
             exit $RC
         """,
         conn_timeout=60,
